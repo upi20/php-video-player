@@ -1,0 +1,14 @@
+services:
+  player:
+    build: ./.docker
+    image: vid-player:latest
+    container_name: vid-player
+    ports:
+      # Only reachable from this computer. Use "8015:80" to open it to the local network.
+      - "127.0.0.1:8015:80"
+    volumes:
+      - ./:/var/www/html:ro
+      - ./.docker/apache.conf:/etc/apache2/conf-enabled/zz-vid.conf:ro
+      # Thumbnails, loudness maps and previews (the only writable folder).
+      - ./.cache:/cache
+    restart: unless-stopped

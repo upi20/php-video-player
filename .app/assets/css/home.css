@@ -1,0 +1,110 @@
+/* Home: video grid. Mobile first — 1 column with edge-to-edge thumbnails, more columns as space allows. */
+
+.home { padding-bottom: 32px; }
+
+/* Sort chips, scrollable sideways on small screens */
+.chips-bar {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px var(--gutter);
+  overflow-x: auto;
+  background: var(--bg-glass);
+  backdrop-filter: blur(14px);
+  scrollbar-width: none;
+}
+
+.chips-bar::-webkit-scrollbar { display: none; }
+
+.chip-btn {
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .15s, color .15s;
+}
+
+.chip-btn[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+
+.chips-count {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  margin: 0;
+  padding: 4px 0 0;
+  list-style: none;
+}
+
+.card {
+  display: block;
+  outline: none;
+}
+
+.card .thumb { border-radius: 0; }
+
+.card-body { padding: 10px var(--gutter) 0; }
+
+.card-title {
+  display: -webkit-box;
+  margin: 0 0 4px;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.card-meta {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.card:focus-visible .thumb { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+@media (hover: hover) {
+  .chip-btn:hover:not([aria-pressed="true"]) { background: var(--surface-3); }
+  .card:hover .thumb img { transform: scale(1.04); }
+  .card:hover .card-title { color: #fff; }
+}
+
+@media (min-width: 600px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 28px 16px;
+    padding: 8px var(--gutter) 0;
+  }
+  .card .thumb { border-radius: 12px; }
+  .card-body { padding: 10px 2px 0; }
+}
+
+@media (min-width: 960px) {
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1360px) {
+  .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1800px) {
+  .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}

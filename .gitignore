@@ -1,0 +1,10 @@
+# Whitelist: this folder also holds your videos and the generated cache,
+# so ignore everything and only track the app itself.
+/*
+!/.gitignore
+!/README.md
+!/index.php
+!/docker-compose.yml
+!/.app/
+!/.docker/
+.DS_Store
