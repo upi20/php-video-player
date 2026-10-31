@@ -1,0 +1,14 @@
+{
+    "name": "upi20/php-video-player-telegram",
+    "description": "Telegram bridge for php-video-player (MadelineProto)",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.2",
+        "danog/madelineproto": "^8.15"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

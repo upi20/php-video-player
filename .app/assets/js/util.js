@@ -91,7 +91,8 @@ export const matchesSearch = (video, words) => words.every((w) => video.title.to
 
 // ---------- URLs ----------
 // The cache key (k) changes whenever the file does, so the server lets browsers cache forever.
-const apiUrl = (action, v, extra = '') => `?api=${action}&v=${encodeURIComponent(v.name)}&k=${v.key}${extra}`;
+// Telegram videos name themselves differently (v.api, see toVideo in tg.js).
+const apiUrl = (action, v, extra = '') => `?api=${action}&${v.api ?? `v=${encodeURIComponent(v.name)}`}&k=${v.key}${extra}`;
 export const thumbUrl = (v) => apiUrl('thumb', v);
 export const loudnessUrl = (v) => apiUrl('loudness', v);
 export const storyboardUrl = (v, sheet) => apiUrl('storyboard', v, sheet ? `&sheet=${sheet}` : '');
@@ -104,6 +105,91 @@ export function watchedPercent(v) {
   const pos = store.get(posKey(v), 0);
   return v.duration && pos ? Math.min(100, (pos / v.duration) * 100) : 0;
 }
+
+// ---------- Changing files ----------
+/** POST to an API action that changes files (the header is checked by isAppPost() in api.php). */
+export async function postApi(action, body) {
+  const res = await fetch(`?api=${action}`, {
+    method: 'POST',
+    headers: { 'X-Requested-With': 'video-player' },
+    body: new URLSearchParams(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data;
+}
+
+/** Modal confirmation using the native <dialog>. Resolves true only when confirmed. */
+export function confirmDialog({ title, message, confirmLabel }) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'confirm';
+  dialog.innerHTML = `
+    <form method="dialog">
+      <h2></h2>
+      <p></p>
+      <div class="confirm-actions">
+        <button class="btn" value="cancel" autofocus>Batal</button>
+        <button class="btn danger" value="ok"></button>
+      </div>
+    </form>`;
+  dialog.querySelector('h2').textContent = title;
+  dialog.querySelector('p').textContent = message;
+  dialog.querySelector('[value="ok"]').textContent = confirmLabel;
+  // Clicking the dimmed backdrop cancels, like Escape does.
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close('cancel');
+  });
+  document.body.append(dialog);
+  dialog.showModal();
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => {
+      resolve(dialog.returnValue === 'ok');
+      dialog.remove();
+    }, { once: true });
+  });
+}
+
+let noticeTimer = null;
+
+/** Short message at the bottom of the screen. */
+export function notice(text, isError = false) {
+  let el = document.querySelector('.notice');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'notice';
+    el.setAttribute('role', 'status');
+    document.body.append(el);
+  }
+  el.textContent = text;
+  el.classList.toggle('error', isError);
+  el.hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { el.hidden = true; }, isError ? 6000 : 3500);
+}
+
+/**
+ * Asks for confirmation, then permanently deletes the file and forgets its watch position.
+ * Resolves true when the file is gone.
+ */
+export async function deleteWithConfirm(file, message) {
+  const confirmed = await confirmDialog({
+    title: 'Hapus file ini?',
+    message: message ?? `"${file.name}" (${fmtSize(file.size)}) akan dihapus permanen dari folder. Tindakan ini tidak bisa dibatalkan.`,
+    confirmLabel: 'Hapus permanen',
+  });
+  if (!confirmed) return false;
+  try {
+    await postApi('delete', { v: file.name });
+  } catch (e) {
+    notice(`Gagal menghapus: ${e.message}`, true);
+    return false;
+  }
+  store.del(posKey(file));
+  notice(`"${file.title}" dihapus`);
+  return true;
+}
+
+export const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
 
 /** Inner HTML of a .thumb: cover image, duration badge and watched bar. */
 export function thumbHtml(v) {

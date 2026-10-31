@@ -20,6 +20,9 @@ $data = ['videos' => $videos, 'current' => $current['name']];
           <button class="btn" id="next" title="Berikutnya (N)">
             <span class="label">Berikutnya</span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
           </button>
+          <button class="btn danger-ghost" id="delete" title="Hapus video ini dari folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span class="label">Hapus</span>
+          </button>
           <label class="switch" title="Putar otomatis video berikutnya">
             <input type="checkbox" id="autoplay">
             <span class="switch-track"></span>

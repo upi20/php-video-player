@@ -42,6 +42,27 @@
   white-space: nowrap;
 }
 
+/* Shown when some files still need converting before they can be played */
+.convert-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px var(--gutter) 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 176, 32, 0.35);
+  border-radius: 12px;
+  background: rgba(255, 176, 32, 0.08);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.convert-banner svg { flex: none; width: 20px; height: 20px; color: var(--loud); }
+.convert-banner-cta { flex: none; margin-left: auto; color: var(--loud); font-weight: 700; }
+
+@media (hover: hover) {
+  .convert-banner:hover { background: rgba(255, 176, 32, 0.14); }
+}
+
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -51,9 +72,45 @@
   list-style: none;
 }
 
+.card-wrap { position: relative; }
+
+/* Virtual grid (vgrid.js): every card has the same height, so rows can be computed instead of
+   rendered. Titles always take two lines and the meta line one. */
+.vgrid-spacer { grid-column: 1 / -1; }
+.vgrid-spacer[hidden] { display: none; }
+.vgrid .card-title { height: calc(2 * 1.35em); }
+.vgrid .card-meta { height: 1.4em; overflow: hidden; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+
 .card {
   display: block;
   outline: none;
+}
+
+/* Delete button over the thumbnail's top-right corner: always visible on touch, on hover otherwise */
+.card-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  transition: opacity .15s, background .15s;
+}
+
+.card-delete svg { width: 18px; height: 18px; }
+.card-delete:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
+
+@media (hover: hover) {
+  .card-delete { opacity: 0; }
+  .card-wrap:hover .card-delete { opacity: 1; }
+  .card-delete:hover { background: var(--danger); }
 }
 
 .card .thumb { border-radius: 0; }

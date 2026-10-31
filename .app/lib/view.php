@@ -13,6 +13,21 @@ function asset(string $path): string
     return '.app/assets/' . $path . '?v=' . (is_file($file) ? filemtime($file) : 0);
 }
 
+/**
+ * Import map giving every JS module its versioned URL. Modules import each other as "./util.js",
+ * which asset() can't version, so without this an edited module could stay stale in the browser
+ * or Cloudflare cache while the page script importing it is already new.
+ */
+function importMap(): string
+{
+    $imports = [];
+    foreach (glob(APP_DIR . '/assets/js/*.js') ?: [] as $file) {
+        $path = 'js/' . basename($file);
+        $imports['./.app/assets/' . $path] = './' . asset($path);
+    }
+    return scriptJson(['imports' => $imports]);
+}
+
 /** JSON that is safe to place inside a <script> element. */
 function scriptJson(mixed $data): string
 {
@@ -29,6 +44,7 @@ function scriptJson(mixed $data): string
 function renderPage(string $page, array $vars): void
 {
     extract($vars);
+    $convertCount = pendingConversionCount(); // badge on the header's Konversi link
     $title = 'Video Player';
     $styles = [];
     $script = null;

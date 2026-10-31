@@ -112,6 +112,7 @@ export function createSeekbar(video) {
       ready: '<span class="dot"></span><span class="label">Suara keras</span>',
       none: '<span class="label">Tanpa audio</span>',
       error: '<span class="label">Analisis suara gagal</span>',
+      remote: '<span class="label">Video terlalu besar untuk peta suara · simpan ke vid dulu</span>',
     }[kind];
   }
 
@@ -138,6 +139,12 @@ export function createSeekbar(video) {
     wave.norm = null;
     board.video = v;
     board.meta = null;
+    if (v.remote) {
+      // A big Telegram video: no loudness map or previews until it is saved locally.
+      setStatus('remote');
+      draw();
+      return;
+    }
     setStatus('busy');
     draw();
 
@@ -161,6 +168,8 @@ export function createSeekbar(video) {
   }
 
   function prefetch(v) {
+    // Not for Telegram videos: that would download the whole next video in the background.
+    if (v.remote || v.item) return;
     getJson(loudnessUrl(v)).catch(() => {});
     getJson(storyboardUrl(v)).catch(() => {});
   }

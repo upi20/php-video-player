@@ -7,6 +7,7 @@
 <meta name="theme-color" content="#0d0d10">
 <title><?= e($title) ?></title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%238b7bff'/%3E%3Cpath d='M12 9v14l11-7z' fill='white'/%3E%3C/svg%3E">
+<script type="importmap"><?= importMap() ?></script>
 <link rel="stylesheet" href="<?= e(asset('css/base.css')) ?>">
 <?php foreach ($styles as $style): ?>
 <link rel="stylesheet" href="<?= e(asset($style)) ?>">

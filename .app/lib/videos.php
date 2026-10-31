@@ -46,6 +46,29 @@ function videoInfo(string $path, string $key): array
     return is_array($info) ? $info + $empty : $empty;
 }
 
+/**
+ * Permanently deletes a video (or a file waiting for conversion) and everything cached for it.
+ * Goes through the writable MEDIA_DIR mount; refuses while the file is being converted.
+ */
+function deleteVideo(string $name): void
+{
+    $path = videoPath($name) ?? convertSourcePath($name);
+    if ($path === null) {
+        throw new RuntimeException('File tidak ditemukan');
+    }
+    $key = cacheKey($name, $path);
+    if (convertSourcePath($name) !== null
+        && in_array(conversionStatus($name, $path, $key)['state'], ['queued', 'running'], true)) {
+        throw new RuntimeException('File ini sedang dikonversi. Batalkan dulu konversinya.');
+    }
+    if (!@unlink(MEDIA_DIR . '/' . $name)) {
+        throw new RuntimeException('File tidak bisa dihapus. Pastikan baris "./:/media" ada di docker-compose.yml.');
+    }
+    foreach ([...(glob(CACHE_DIR . "/$key.*") ?: []), ...(glob(JOBS_DIR . "/$key.*") ?: [])] as $cached) {
+        removePath($cached);
+    }
+}
+
 /** Every playable video in VIDEO_DIR, with what the pages need to show it. */
 function listVideos(): array
 {

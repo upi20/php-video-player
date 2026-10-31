@@ -21,7 +21,14 @@ Video di-*stream* langsung oleh Apache (HTTP Range), jadi bisa loncat ke menit m
 - Autoplay video berikutnya dengan hitung mundur yang bisa dibatalkan
 - Ganti video tanpa reload halaman, tombol Back browser tetap berfungsi
 - Kecepatan putar, volume (diingat), layar penuh, dan shortcut keyboard
+- Hapus video langsung dari beranda atau halaman tonton, dengan konfirmasi
 - Mobile-first: di HP player menempel di atas saat daftar putar di-scroll
+
+**Konversi ke MP4**
+- Halaman khusus untuk file yang tidak bisa diputar browser (`.ts`, `.avi`, `.wmv`, `.flv`, `.mkv`, dan lainnya)
+- Berjalan di latar belakang, satu per satu, dengan progress langsung (persen, kecepatan, sisa waktu). Halaman boleh ditutup.
+- Otomatis memilih cara tercepat: kalau codec-nya sudah cocok (misalnya `.ts` H.264/AAC dari unduhan HLS), cukup ganti bungkus dalam hitungan detik tanpa mengubah kualitas. Kalau tidak cocok, di-encode ulang ke H.264/AAC.
+- File asli tidak pernah diubah atau dihapus otomatis. Setelah MP4-nya jadi, file asli bisa dihapus dengan tombol **Hapus .ts**.
 
 ## Kebutuhan
 
@@ -82,6 +89,20 @@ Container otomatis menyala lagi setiap Docker dijalankan (`restart: unless-stopp
 | <kbd>N</kbd> / <kbd>P</kbd> | Video berikutnya / sebelumnya |
 | <kbd>/</kbd> | Fokus ke pencarian |
 
+## Konversi ke MP4
+
+Buka menu **Konversi** di header. Badge di sana menunjukkan jumlah file yang belum dikonversi, dan beranda juga menampilkan banner kalau ada file seperti itu.
+
+| Codec sumber | Yang dilakukan | Kecepatan |
+|---|---|---|
+| Video H.264 / HEVC / AV1 / VP9, audio AAC / MP3 | Ganti bungkus saja (`-c copy`) | ~1 detik, kualitas tetap |
+| Video cocok, audio lain (misalnya PCM, AC3) | Video disalin, audio di-encode ke AAC | Beberapa detik |
+| Video lain (MPEG-4/Xvid, WMV, MPEG-2, ...) | Encode ulang ke H.264 (`libx264 -preset veryfast -crf 21`) | Kira-kira 5–20× lebih cepat dari durasi video |
+
+Hasilnya `nama.mp4` di folder yang sama. Selama proses, file ditulis sebagai `.nama.mp4.part` (tersembunyi), lalu diganti nama setelah selesai. Jadi file setengah jadi tidak pernah muncul di daftar video. Kalau `nama.mp4` sudah ada, file itu dianggap sudah dikonversi dan tidak akan ditimpa.
+
+Setiap konversi dijalankan sebagai proses terpisah (`setsid`) dan diantrekan dengan `flock`, jadi hanya satu ffmpeg yang berjalan pada satu waktu. Statusnya disimpan di `.cache/jobs/`. Kalau container di-restart di tengah konversi, file itu ditandai gagal dan bisa diulang dengan tombol **Coba lagi**.
+
 ## Cara kerja
 
 ```
@@ -112,6 +133,22 @@ Semua endpoint menerima `v=<nama file>` dan `k=<kunci cache>`. Karena kunci beru
 | `?api=storyboard` | `{"interval","cols","rows","width","height","sheets","frames"}` |
 | `?api=storyboard&sheet=N` | JPEG lembar pratinjau ke-N (mulai dari 1) |
 
+Endpoint konversi tidak memakai kunci cache:
+
+| Endpoint | Hasil |
+|---|---|
+| `GET ?api=jobs` | `{"<nama file>": {"state", "percent", "speed", "eta", "error"}}` |
+| `POST ?api=convert` dengan `v=<nama>` atau `all=1` | Masukkan ke antrean, lalu kembalikan status semua file |
+| `POST ?api=cancel` dengan `v=<nama>` | Batalkan konversi yang sedang antre atau berjalan |
+
+Menghapus file:
+
+| Endpoint | Hasil |
+|---|---|
+| `POST ?api=delete` dengan `v=<nama>` | Hapus file permanen beserta cache-nya. Ditolak (409) kalau file sedang dikonversi. |
+
+`state` berisi salah satu dari `idle`, `queued`, `running`, `converted`, `failed`, atau `canceled`. Semua request POST wajib membawa header `X-Requested-With: video-player`, supaya situs lain tidak bisa memicu konversi atau penghapusan lewat browser Anda.
+
 ## Struktur proyek
 
 ```
@@ -122,12 +159,12 @@ docker-compose.yml
   apache.conf               blokir file privat, matikan daftar isi folder
 .app/
   lib/                      PHP: bootstrap, process, cache, videos, loudness,
-                            storyboard, thumbnail, api, view
-  views/                    layout, home, watch, partials/(header, player)
+                            storyboard, thumbnail, convert, api, view
+  views/                    layout, home, watch, convert, partials/(header, player)
   assets/
-    css/                    base, home, watch (mobile-first)
-    js/                     util, home, watch, player, seekbar (ES modules)
-.cache/                     dibuat otomatis, tidak di-commit
+    css/                    base, home, watch, convert (mobile-first)
+    js/                     util, home, watch, player, seekbar, convert (ES modules)
+.cache/                     dibuat otomatis, tidak di-commit (jobs/ = antrean konversi)
 ```
 
 Tidak ada build step, framework, atau dependensi npm/Composer.
@@ -138,6 +175,8 @@ Tidak ada build step, framework, atau dependensi npm/Composer.
 |---|---|
 | Port, atau buka akses dari jaringan lokal | `ports` di `docker-compose.yml` |
 | Ekstensi file yang dianggap video | `VIDEO_EXTS` di `.app/lib/bootstrap.php` |
+| Ekstensi file yang ditawarkan untuk dikonversi | `CONVERT_EXTS` di `.app/lib/bootstrap.php` |
+| Kualitas encode ulang | `-preset` dan `-crf` di `ffmpegConvertArgs()`, `.app/lib/convert.php` |
 | Ambang "suara keras" (default 20% teratas) | `LOUD` di `.app/assets/js/seekbar.js` |
 | Ukuran dan kerapatan pratinjau hover | konstanta `SB_*` di `.app/lib/storyboard.php` |
 | Ukuran thumbnail | `THUMB_W`, `THUMB_H` di `.app/lib/thumbnail.php` |
@@ -149,7 +188,7 @@ Mengubah ukuran thumbnail atau pratinjau tidak memengaruhi cache yang sudah ada.
 
 ## Keamanan
 
-- Folder video di-mount **read-only**. Aplikasi tidak bisa mengubah atau menghapus video. Satu-satunya folder yang bisa ditulis adalah `.cache/`.
+- Apache menyajikan folder video dari mount **read-only**. Folder yang sama di-mount sekali lagi di `/media` dengan akses tulis, **khusus untuk converter**. Mount ini dipakai converter untuk menambahkan MP4 baru (tanpa pernah menimpa file), dan oleh tombol **Hapus**, yang selalu meminta konfirmasi dan hanya bisa menghapus file video di folder ini. Kalau tidak butuh fitur Konversi dan Hapus, hapus baris `- ./:/media` di `docker-compose.yml`, maka seluruh folder kembali read-only (kecuali `.cache/`).
 - Secara default port hanya terbuka untuk `127.0.0.1`, jadi tidak bisa diakses dari perangkat lain.
 - Apache hanya menyajikan `index.php`, `.app/assets/`, dan file video. `.app/lib`, `.app/views`, `.cache`, `.docker`, `.git`, file tersembunyi, serta file konfigurasi ditolak (403).
 - Nama file dari URL divalidasi: harus berupa file video di folder ini, tanpa path, dan bukan file tersembunyi.

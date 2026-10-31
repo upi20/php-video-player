@@ -1,0 +1,222 @@
+/* Telegram module: setup/login panels, channel browser, and extras on the watch page. Mobile first. */
+
+/* ---------- Panels (setup, login, messages) ---------- */
+.tg { padding-bottom: 40px; }
+
+.tg-panel {
+  max-width: 560px;
+  margin: 24px var(--gutter);
+  padding: 22px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tg-panel h1 { margin: 0 0 8px; font-size: 20px; letter-spacing: -0.01em; }
+.tg-lead { margin: 0 0 16px; color: var(--muted); }
+.tg-note { margin: 16px 0 0; color: var(--faint); font-size: 12px; }
+.tg-error { margin: 10px 0 0; color: var(--danger); }
+.tg-panel a { color: var(--accent); }
+
+.tg-steps { margin: 0; padding-left: 20px; line-height: 1.6; }
+.tg-steps li + li { margin-top: 6px; }
+
+.tg-panel code,
+.tg-caption code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tg-form label { display: block; margin-bottom: 6px; font-weight: 600; }
+.tg-form-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.tg-form input,
+.tg-select,
+.tg-search {
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+  background: var(--surface-2);
+}
+
+.tg-form input { flex: 1 1 220px; font-size: 16px; } /* 16px stops iOS zooming in */
+.tg-form input:focus,
+.tg-select:focus,
+.tg-search:focus { border-color: var(--accent); }
+
+/* ---------- Channel browser ---------- */
+.tg-toolbar {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px var(--gutter);
+  background: var(--bg-glass);
+  backdrop-filter: blur(14px);
+}
+
+/* Pinned channels: a row of chips, scrollable sideways on small screens */
+.tg-pins {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tg-pins[hidden] { display: none; }
+.tg-pins::-webkit-scrollbar { display: none; }
+
+.tg-channel-row { display: flex; flex: 1 1 100%; gap: 8px; min-width: 0; }
+.tg-select { flex: 1 1 auto; }
+.tg-pin { flex: none; height: 40px; }
+.tg-pin[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.tg-pin[aria-pressed="true"] svg { fill: currentColor; }
+.tg-search { flex: 1 1 160px; }
+.tg-count { color: var(--faint); font-size: 12px; white-space: nowrap; }
+
+/* Page box: "Hal. [12] / 95" — the page follows scrolling and can be typed to jump */
+.tg-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tg-pager input {
+  width: 64px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.tg-pager input::-webkit-inner-spin-button,
+.tg-pager input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.tg-pager input:focus { border-color: var(--accent); }
+
+/* Cards still loading, and the rare message that isn't a playable video */
+.tg-skeleton .thumb { animation: tg-pulse 1.4s ease-in-out infinite; }
+.tg-skeleton .card-title { width: 80%; border-radius: 6px; background: var(--surface-2); }
+.tg-skeleton .card-meta { width: 45%; border-radius: 6px; background: var(--surface-2); }
+.tg-unavailable { opacity: .5; }
+
+@keyframes tg-pulse { 50% { opacity: .55; } }
+
+.tg-account {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tg-account .btn { height: 34px; padding: 0 10px; }
+
+.tg-more { display: flex; justify-content: center; padding: 20px var(--gutter) 0; }
+
+.tg-nothumb {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.tg-saved {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(21, 128, 61, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ---------- Watch page extras ---------- */
+.tg-channel {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tg-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.tg-save.done { border-color: rgba(74, 222, 128, 0.35); color: #4ade80; }
+.tg-save.failed { border-color: rgba(255, 107, 107, 0.35); color: var(--danger); }
+.tg-save .btn { height: 32px; margin-left: auto; }
+
+.tg-save .progress {
+  flex: 1 1 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.tg-save .progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .5s ease;
+}
+
+.tg-save .progress.indeterminate span {
+  width: 30% !important;
+  animation: tg-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes tg-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+
+.tg-caption {
+  margin: 14px 0 0;
+  color: var(--muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 768px) {
+  .tg-panel { margin: 40px auto; padding: 28px; }
+  .tg-channel-row { flex: 0 1 440px; }
+}
+
+@media (min-width: 1024px) {
+  .watch .tg-more { padding: 10px; }
+}

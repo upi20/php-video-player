@@ -126,8 +126,49 @@ button { cursor: pointer; }
 
 .search input:focus { border-color: var(--accent); background: var(--surface-2); }
 
+.nav-link {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 600;
+  transition: background .15s, color .15s;
+}
+
+.nav-link svg { width: 20px; height: 20px; }
+.nav-link.active { background: var(--surface-2); color: var(--text); }
+.nav-label { display: none; }
+
+.nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--loud);
+  color: #111;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+@media (hover: hover) {
+  .nav-link:hover { background: var(--surface-2); color: var(--text); }
+}
+
 @media (min-width: 600px) {
   .brand-name { display: inline; }
+  .nav-link { padding: 0 14px; }
+  .nav-label { display: inline; }
+  .nav-badge { position: static; }
 }
 
 @media (min-width: 900px) {
@@ -154,10 +195,52 @@ button { cursor: pointer; }
 .btn.primary { border-color: transparent; background: var(--accent); color: #fff; }
 .btn.ghost { background: transparent; }
 
+.btn.danger { border-color: transparent; background: var(--danger); color: #fff; }
+.btn.danger-ghost { color: var(--danger); }
+
 @media (hover: hover) {
   .btn:hover:not(:disabled) { background: var(--surface-3); }
   .btn.primary:hover { background: var(--accent-hover); }
+  .btn.danger:hover:not(:disabled) { background: #ff8a8a; }
 }
+
+/* ---------- Confirmation dialog & notices (util.js) ---------- */
+dialog.confirm {
+  width: min(440px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  animation: rise .18s ease-out;
+}
+
+dialog.confirm::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(2px); }
+dialog.confirm h2 { margin: 0 0 8px; font-size: 17px; }
+dialog.confirm p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+.notice {
+  position: fixed;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 100;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  transform: translateX(-50%);
+  animation: rise .2s ease-out;
+}
+
+.notice.error { background: var(--danger); color: #fff; }
+
+@keyframes rise { from { opacity: 0; translate: 0 8px; } }
 
 .chip {
   padding: 3px 10px;
@@ -197,7 +280,9 @@ mark { border-radius: 3px; background: rgba(139, 123, 255, 0.35); color: inherit
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Whole picture, never cropped: portrait thumbnails get black bars at the sides */
+  object-fit: contain;
+  background: #000;
   animation: fade .3s ease-out;
   transition: transform .3s ease;
 }

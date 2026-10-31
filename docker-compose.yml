@@ -9,6 +9,32 @@ services:
     volumes:
       - ./:/var/www/html:ro
       - ./.docker/apache.conf:/etc/apache2/conf-enabled/zz-vid.conf:ro
-      # Thumbnails, loudness maps and previews (the only writable folder).
+      # The same folder, writable, used only by the converter (Konversi page) to add new MP4s.
+      # It never overwrites or deletes files. Remove this line to keep the folder read-only.
+      - ./:/media
+      # Thumbnails, loudness maps, previews and conversion jobs.
       - ./.cache:/cache
     restart: unless-stopped
+
+  # Telegram module: streams videos from channels you joined and saves them here.
+  # Needs TG_API_ID / TG_API_HASH in .env (see .env.example). Not reachable from outside:
+  # the player proxies /tg/* to it.
+  tg:
+    build: ./.app/tg
+    image: vid-telegram:latest
+    container_name: vid-telegram
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./:/media
+      - ./.app/tg/server.php:/app/server.php:ro
+      # Telegram thumbnails are cached here (.cache/tg) after the first fetch.
+      - ./.cache:/cache
+      # Telegram login session = full access to your account. Kept in a Docker volume,
+      # outside this folder, so it can never be served or committed.
+      - tg-session:/session
+    restart: unless-stopped
+
+volumes:
+  tg-session:

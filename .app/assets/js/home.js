@@ -1,7 +1,7 @@
 // Home page: a YouTube-style grid of every video, with sort chips and live search.
 import {
-  $, appData, escapeHtml, fmtAgo, fmtSize, highlight, matchesSearch, searchWords, sortVideos, store,
-  thumbHtml, watchUrl,
+  $, appData, deleteWithConfirm, escapeHtml, fmtAgo, fmtSize, highlight, matchesSearch, searchWords,
+  sortVideos, store, thumbHtml, TRASH_ICON, watchUrl,
 } from './util.js';
 
 const { videos } = appData;
@@ -19,7 +19,7 @@ function render() {
 
   grid.innerHTML = list.map((v) => {
     const meta = [v.height ? `${v.height}p` : null, fmtSize(v.size), fmtAgo(v.mtime)].filter(Boolean).join(' · ');
-    return `<li>
+    return `<li class="card-wrap">
       <a class="card" href="${watchUrl(v)}" title="${escapeHtml(v.title)}">
         <div class="thumb">${thumbHtml(v)}</div>
         <div class="card-body">
@@ -27,6 +27,7 @@ function render() {
           <p class="card-meta">${meta}</p>
         </div>
       </a>
+      <button class="card-delete" data-name="${escapeHtml(v.name)}" title="Hapus video" aria-label="Hapus ${escapeHtml(v.title)}">${TRASH_ICON}</button>
     </li>`;
   }).join('');
 
@@ -37,6 +38,15 @@ function render() {
   count.textContent = words.length ? `${list.length} dari ${videos.length}` : `${videos.length} video`;
   for (const chip of chips) chip.setAttribute('aria-pressed', String(chip.dataset.sort === sort));
 }
+
+grid.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.card-delete');
+  if (!btn) return;
+  const index = videos.findIndex((v) => v.name === btn.dataset.name);
+  if (index < 0 || !(await deleteWithConfirm(videos[index]))) return;
+  videos.splice(index, 1);
+  render();
+});
 
 for (const chip of chips) {
   chip.addEventListener('click', () => {

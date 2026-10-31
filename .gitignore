@@ -5,6 +5,7 @@
 !/README.md
 !/index.php
 !/docker-compose.yml
+!/.env.example
 !/.app/
 !/.docker/
 .DS_Store
