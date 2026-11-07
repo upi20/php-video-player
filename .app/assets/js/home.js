@@ -72,9 +72,18 @@ document.addEventListener('keydown', (e) => {
   search.focus();
 });
 
-// Coming back from a video (back button / bfcache): refresh the watched bars.
-window.addEventListener('pageshow', (e) => {
-  if (e.persisted) render();
+// Coming back from a video (back button / bfcache): the page still has the list it was served
+// with, so ask which videos were watched since, then refresh the watched bars and badges.
+window.addEventListener('pageshow', async (e) => {
+  if (!e.persisted) return;
+  try {
+    const res = await fetch('?api=watched', { cache: 'no-store' });
+    const watched = res.ok ? await res.json() : null;
+    if (watched) for (const v of videos) v.watched = watched[v.name] ?? null;
+  } catch {
+    // offline: just redraw what we have
+  }
+  render();
 });
 
 render();

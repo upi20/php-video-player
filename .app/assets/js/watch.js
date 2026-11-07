@@ -1,17 +1,18 @@
 // Watch page for local videos: playlist, switching videos without reloading, delete.
 // Toast, up next, resume, theater mode and shortcuts come from stage.js.
 import {
-  $, appData, deleteWithConfirm, escapeHtml, fmtAgo, fmtSize, fmtTime, highlight, matchesSearch,
-  searchWords, sortVideos, store, thumbHtml, thumbUrl, watchedPercent, watchUrl,
+  $, appData, deleteWithConfirm, escapeHtml, fmtAgo, fmtSize, fmtTime, highlight, matchesSearch, postApi,
+  posKey, searchWords, seenKey, sortVideos, store, thumbHtml, thumbUrl, WATCHED_BADGE, watchedPercent, watchUrl,
 } from './util.js';
 import { createPlayer } from './player.js';
-import { createToast, createUpNext, setupPlayback, setupShortcuts, setupTheater } from './stage.js';
+import { autoplay, createToast, createUpNext, onPlayedEnough, setupPlayback, setupShortcuts, setupTheater } from './stage.js';
 
 const { videos } = appData;
 const byName = new Map(videos.map((v) => [v.name, v]));
 const els = {
   watch: $('watch'), title: $('title'), chips: $('chips'), list: $('list'), count: $('count'),
   search: $('search'), sort: $('sort'), prev: $('prev'), next: $('next'), autoplay: $('autoplay'), delete: $('delete'),
+  watched: $('watched'),
 };
 
 const player = createPlayer();
@@ -92,7 +93,7 @@ function go(v) {
   load(v, true);
 }
 
-function load(v, autoplay) {
+function load(v, play) {
   upnext.hide();
   toast.hide();
   current = v;
@@ -100,7 +101,7 @@ function load(v, autoplay) {
   renderNow();
   markActive(true);
   player.load(v, neighbor(1));
-  if (autoplay) video.play().catch(() => {});
+  if (play) autoplay(player, toast);
 }
 
 function renderNow() {
@@ -114,7 +115,56 @@ function renderNow() {
   ].filter(Boolean);
   els.title.textContent = current.title;
   els.chips.innerHTML = chips.map((c) => `<span class="chip">${escapeHtml(c)}</span>`).join('');
+  renderWatched(current);
 }
+
+// ---------- Ditonton (stored on the server, so every device sees it) ----------
+function renderWatched(v) {
+  if (v === current) {
+    els.watched.setAttribute('aria-pressed', String(Boolean(v.watched)));
+    els.watched.querySelector('.label').textContent = v.watched ? 'Sudah ditonton' : 'Tandai ditonton';
+  }
+  const thumb = itemEls.get(v.name)?.querySelector('.thumb');
+  const badge = thumb?.querySelector('.watched-badge');
+  if (v.watched && thumb && !badge) thumb.insertAdjacentHTML('beforeend', WATCHED_BADGE);
+  if (!v.watched) badge?.remove();
+}
+
+/** Saves v.watched on the server; shown right away, undone if it fails. */
+async function setWatched(v, on) {
+  if (Boolean(v.watched) === on) return;
+  const before = v.watched;
+  v.watched = on ? Math.floor(Date.now() / 1000) : null;
+  renderWatched(v);
+  try {
+    v.watched = (await postApi('watched', { v: v.name, on: on ? 1 : 0 })).watched;
+  } catch (err) {
+    v.watched = before;
+    toast.show(err.message, null, null, true);
+  }
+  renderWatched(v);
+}
+
+let noAutoMark = null; // unmarked by hand: don't mark it again while it keeps playing
+
+function toggleWatched() {
+  if (!current) return;
+  const on = !current.watched;
+  noAutoMark = on ? null : current;
+  if (!on) { // "not watched" empties the bar under the thumbnail too
+    store.del(seenKey(current));
+    store.del(posKey(current));
+    updateWatched(current);
+  }
+  setWatched(current, on);
+}
+
+onPlayedEnough(video, {
+  current: () => current,
+  onWatched: (v) => {
+    if (!v.watched && v !== noAutoMark) setWatched(v, true);
+  },
+});
 
 window.addEventListener('popstate', () => {
   const v = byName.get(new URLSearchParams(location.search).get('v') ?? '');
@@ -133,6 +183,7 @@ video.addEventListener('ended', () => {
 // ---------- Controls below the video ----------
 els.prev.addEventListener('click', () => go(neighbor(-1)));
 els.next.addEventListener('click', () => go(neighbor(1)));
+els.watched.addEventListener('click', toggleWatched);
 
 // Delete the current video, then continue with the next one (or the previous one at the end).
 els.delete.addEventListener('click', async () => {
@@ -179,9 +230,10 @@ setupShortcuts(player, {
   n: () => go(neighbor(1)),
   p: () => go(neighbor(-1)),
   '/': () => els.search.focus(),
+  w: toggleWatched,
 });
 
 // ---------- Init ----------
 current = byName.get(appData.current);
 renderList();
-load(current, false);
+load(current, true); // opened by clicking a video: start playing

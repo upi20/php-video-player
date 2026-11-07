@@ -65,10 +65,10 @@
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr)); /* phones too: one video per row is too big */
+  gap: 18px 10px;
   margin: 0;
-  padding: 4px 0 0;
+  padding: 4px var(--gutter) 0;
   list-style: none;
 }
 
@@ -113,15 +113,15 @@
   .card-delete:hover { background: var(--danger); }
 }
 
-.card .thumb { border-radius: 0; }
+.card .thumb { border-radius: 8px; }
 
-.card-body { padding: 10px var(--gutter) 0; }
+.card-body { padding: 8px 2px 0; }
 
 .card-title {
   display: -webkit-box;
   margin: 0 0 4px;
   overflow: hidden;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -133,7 +133,7 @@
 .card-meta {
   margin: 0;
   color: var(--faint);
-  font-size: 13px;
+  font-size: 11.5px;
 }
 
 .card:focus-visible .thumb { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -152,6 +152,8 @@
   }
   .card .thumb { border-radius: 12px; }
   .card-body { padding: 10px 2px 0; }
+  .card-title { font-size: 15px; }
+  .card-meta { font-size: 13px; }
 }
 
 @media (min-width: 960px) {

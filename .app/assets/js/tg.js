@@ -1,5 +1,5 @@
 // Talking to the Telegram module (the "tg" container, which Apache proxies under /tg/).
-import { escapeHtml, fmtAgo, fmtSize, fmtTime, watchedPercent } from './util.js';
+import { escapeHtml, fmtAgo, fmtSize, fmtTime, WATCHED_BADGE, watchedPercent } from './util.js';
 
 // Telegram's error codes (from MTProto), in plain language.
 const ERRORS = {
@@ -21,38 +21,58 @@ export function friendlyError(code) {
   return ERRORS[code] ?? code ?? 'Terjadi kesalahan';
 }
 
+// While the tg container (re)starts (MadelineProto needs up to half a minute), Apache answers 502/503
+// with an HTML page: reads wait for it and try again rather than failing right away.
+const RESTART_WAIT_MS = 30000;
+const RESTART_RETRY_MS = 2000;
+
 /** GET tg/<path>, or POST when a body is given. Throws an Error with a readable message. */
 export async function tgApi(path, body) {
-  let res;
-  try {
-    res = await fetch(`tg/${path}`, body
-      ? { method: 'POST', headers: { 'X-Requested-With': 'video-player' }, body: new URLSearchParams(body) }
-      : { cache: 'no-store' });
-  } catch {
-    throw new Error('Tidak bisa terhubung ke server.');
+  const started = Date.now();
+  for (;;) {
+    let res;
+    try {
+      res = await fetch(`tg/${path}`, body
+        ? { method: 'POST', headers: { 'X-Requested-With': 'video-player' }, body: new URLSearchParams(body) }
+        : { cache: 'no-store' });
+    } catch {
+      throw new Error('Tidak bisa terhubung ke server.');
+    }
+    const data = await res.json().catch(() => null);
+    if (data === null) {
+      // Not an answer from the tg module: it is (re)starting, or not running at all.
+      if (!body && [502, 503].includes(res.status) && Date.now() - started < RESTART_WAIT_MS) {
+        await new Promise((resolve) => setTimeout(resolve, RESTART_RETRY_MS));
+        continue;
+      }
+      throw new Error('Modul Telegram tidak bisa dihubungi. Kalau baru saja dijalankan ulang, tunggu sebentar lalu muat ulang halaman; kalau tetap begini, jalankan "docker compose up -d" di folder ~/.vid.');
+    }
+    if (!res.ok) throw new Error(friendlyError(data.error));
+    return data;
   }
-  const data = await res.json().catch(() => null);
-  // Apache answers with an HTML error page when the tg container isn't running.
-  if (data === null) throw new Error('Modul Telegram tidak berjalan. Jalankan "docker compose up -d" di folder ~/.vid.');
-  if (!res.ok) throw new Error(friendlyError(data.error));
-  return data;
 }
 
 // Loads the next page by itself once the "Muat lebih banyak" button comes near the screen, so
 // the list keeps going as you scroll. The button stays for clicking after a failed load.
 // Call the returned function after each successful load: if the new page didn't fill the
 // screen, the button is still near and the observer won't fire again on its own.
+// scroller: the element the button scrolls in, when that element scrolls by itself (a sidebar on
+// wide screens); "near" is then measured against its visible part, not the window.
 const AUTO_MORE_MARGIN = 800; // px before the button is actually visible
 
-export function autoLoadMore(button, load) {
+export function autoLoadMore(button, load, scroller = null) {
   const check = () => {
-    if (button.hidden || button.disabled) return;
+    if (button.hidden || button.disabled || !button.isConnected) return;
+    const scrolls = scroller && getComputedStyle(scroller).overflowY !== 'visible';
+    const box = scrolls ? scroller.getBoundingClientRect() : { top: 0, bottom: innerHeight };
     const r = button.getBoundingClientRect();
-    if (r.top < innerHeight + AUTO_MORE_MARGIN && r.bottom > -AUTO_MORE_MARGIN) load();
+    if (r.top < box.bottom + AUTO_MORE_MARGIN && r.bottom > box.top - AUTO_MORE_MARGIN) load();
   };
   if ('IntersectionObserver' in window) {
+    // Clipping by a scrolling ancestor counts, so a button below the sidebar's fold isn't "visible".
     new IntersectionObserver(check, { rootMargin: `${AUTO_MORE_MARGIN}px 0px` }).observe(button);
   }
+  scroller?.addEventListener('scroll', check, { passive: true });
   return check;
 }
 
@@ -62,7 +82,8 @@ export const tgThumbUrl = (item) => (item.thumb
   ? `tg/thumb/${item.c}/${item.m}`
   : `?api=thumb&tg=${item.c}_${item.m}&k=${item.size ?? 0}`);
 export const tgStreamUrl = (item) => `tg/stream/${item.c}/${item.m}`;
-export const tgWatchUrl = (item) => `?page=tg-watch&c=${item.c}&m=${item.m}`;
+/** fav: play through Favorit (across channels) instead of the video's channel. */
+export const tgWatchUrl = (item, fav = false) => `?page=tg-watch&c=${item.c}&m=${item.m}${fav ? '&list=fav' : ''}`;
 
 /** t.me link to the message: by username for public channels, by id otherwise. */
 export function telegramLink(item, channel) {
@@ -73,11 +94,17 @@ export function telegramLink(item, channel) {
 // Bigger videos aren't analysed (loudness map, hover previews) while streaming: the server would
 // have to download all of it first. Same limit as TG_ANALYSE_MAX_BYTES in tganalysis.php.
 const ANALYSE_MAX_BYTES = 300 * 1024 * 1024;
+// Up to this size the tg module downloads a video whole and plays it from disk (STREAM_WHOLE_MAX
+// in server.php): the analysis shares that download, and preparing the next one in the background
+// makes it start instantly. Bigger ones stream straight from Telegram.
+const WHOLE_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * A Telegram video in the shape the player and stage.js expect. `name` is unique so resume
  * positions work; `api` and `key` address its loudness map and previews (?api=…&tg=…);
- * `remote` tells the seek bar it is too big to have them.
+ * `remote` tells the seek bar it is too big to have them; `prefetch` whether it may be prepared
+ * (downloaded) in the background while the previous video plays; `deferAnalysis` that it streams
+ * from Telegram, so its analysis (a download of its own) waits until playback is buffered ahead.
  */
 export function toVideo(item) {
   return {
@@ -89,6 +116,8 @@ export function toVideo(item) {
     api: `tg=${item.c}_${item.m}`,
     key: String(item.size ?? 0),
     remote: (item.size ?? 0) > ANALYSE_MAX_BYTES,
+    prefetch: (item.size ?? Infinity) <= WHOLE_MAX_BYTES,
+    deferAnalysis: (item.size ?? Infinity) > WHOLE_MAX_BYTES,
     item,
   };
 }
@@ -117,15 +146,22 @@ const NO_THUMB = '<span class="tg-nothumb"><svg viewBox="0 0 24 24" fill="curren
 /** Inner HTML of a .thumb for a Telegram video. */
 export function tgThumbHtml(item) {
   const watched = watchedPercent(toVideo(item));
-  return `<img src="${tgThumbUrl(item)}" data-tg-thumb="${tgThumbUrl(item)}" alt="" loading="lazy" decoding="async">`
+  return `<img src="${tgThumbUrl(item)}" data-tg-thumb="${tgThumbUrl(item)}" alt="" loading="lazy" decoding="async" fetchpriority="low">`
     + (item.duration ? `<span class="duration">${fmtTime(item.duration)}</span>` : '')
     + (watched ? `<span class="watched" style="width:${watched}%"></span>` : '')
-    + (item.save?.state === 'done' ? '<span class="tg-saved">Tersimpan</span>' : '');
+    + (item.save?.state === 'done' ? '<span class="tg-saved">Tersimpan</span>' : '')
+    + (item.watched ? WATCHED_BADGE : '')
+    + (item.liked ? LIKED_BADGE : '');
 }
 
+export const LIKED_BADGE = '<span class="tg-liked" title="Di Favorit">❤</span>';
+export const HEART_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7a4.3 4.3 0 0 1 7.5 2.8C19.5 15.4 12 20 12 20z"/></svg>';
+
+/** The meta line of a card (HTML): a "Duplikat" tag first when an older post has the same video. */
 export function tgMeta(item) {
-  return [item.height ? `${item.height}p` : null, item.size ? fmtSize(item.size) : null, item.date ? fmtAgo(item.date) : null]
+  const text = [item.height ? `${item.height}p` : null, item.size ? fmtSize(item.size) : null, item.date ? fmtAgo(item.date) : null]
     .filter(Boolean).join(' · ');
+  return item.dupOf ? `<span class="dup-tag" title="Video yang sama sudah diunggah sebelumnya (#${item.dupOf})">Duplikat</span> ${text}` : text;
 }
 
 export const tgTitleHtml = (item) => escapeHtml(item.title);

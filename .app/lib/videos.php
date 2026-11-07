@@ -62,16 +62,58 @@ function deleteVideo(string $name): void
         throw new RuntimeException('File ini sedang dikonversi. Batalkan dulu konversinya.');
     }
     if (!@unlink(MEDIA_DIR . '/' . $name)) {
-        throw new RuntimeException('File tidak bisa dihapus. Pastikan baris "./:/media" ada di docker-compose.yml.');
+        throw new RuntimeException('File tidak bisa dihapus. Pastikan baris "./data:/media" ada di docker-compose.yml.');
     }
     foreach ([...(glob(CACHE_DIR . "/$key.*") ?: []), ...(glob(JOBS_DIR . "/$key.*") ?: [])] as $cached) {
         removePath($cached);
+    }
+    if (isset(watchedVideos()[$name])) {
+        markWatched($name, false);
+    }
+}
+
+// ---------- Watched ----------
+// name => when it was first played, shown as a badge on every device. In the state folder, not the
+// cache: deleting the cache (which is meant to be safe) once wiped these marks.
+const WATCHED_FILE = STATE_DIR . '/watched.json';
+
+/** @return array<string, int> */
+function watchedVideos(): array
+{
+    $list = is_file(WATCHED_FILE) ? json_decode((string) file_get_contents(WATCHED_FILE), true) : null;
+    return is_array($list) ? array_filter($list, 'is_int') : [];
+}
+
+/** Marks video $name as watched (or not); returns when it was watched, null when it isn't. */
+function markWatched(string $name, bool $on): ?int
+{
+    $lock = @fopen(lockPath(WATCHED_FILE), 'c');
+    if ($lock === false) {
+        throw new RuntimeException('Status ditonton tidak bisa disimpan');
+    }
+    flock($lock, LOCK_EX); // two pages marking at once must not lose each other's change
+    try {
+        $list = watchedVideos();
+        if ($on) {
+            $list[$name] ??= time();
+        } else {
+            unset($list[$name]);
+        }
+        $tmp = WATCHED_FILE . '.tmp';
+        if (file_put_contents($tmp, json_encode($list, JSON_UNESCAPED_UNICODE)) === false || !rename($tmp, WATCHED_FILE)) {
+            throw new RuntimeException('Status ditonton tidak bisa disimpan');
+        }
+        return $list[$name] ?? null;
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
     }
 }
 
 /** Every playable video in VIDEO_DIR, with what the pages need to show it. */
 function listVideos(): array
 {
+    $watched = watchedVideos();
     $videos = [];
     foreach (scandir(VIDEO_DIR) ?: [] as $name) {
         $path = videoPath($name);
@@ -83,13 +125,14 @@ function listVideos(): array
         $videos[] = [
             'name' => $name,
             'title' => substr($name, 0, (int) strrpos($name, '.')),
-            'url' => rawurlencode($name),
+            'url' => VIDEO_URL . rawurlencode($name),
             'ext' => videoExt($name),
             'size' => filesize($path),
             'mtime' => filemtime($path),
             'key' => $key,
             'duration' => round($info['duration'], 2),
             'height' => $info['height'],
+            'watched' => $watched[$name] ?? null,
         ];
     }
     return $videos;

@@ -14,9 +14,12 @@ declare(strict_types=1);
 //   POST ?api=cancel   v=<name>       → stop a queued/running conversion
 //
 //   POST ?api=delete   v=<name>       → delete the file permanently, with its cache → {"ok":true}
+//   GET  ?api=watched                 → {"<name>": unix time, ...} of the videos already watched
+//   POST ?api=watched  v=<name>&on=1|0 → mark as watched (or not) → {"watched": unix time|null}
 //
 // Telegram videos (see tganalysis.php): loudness and storyboard[&sheet=<n>] with tg=<c>_<m>
 // instead of v; the first request downloads and analyses the video, which can take a while.
+// With &cached=1 it answers 404 at once when that hasn't happened yet, instead of starting it.
 // thumb&tg=… is the first frame, for videos uploaded without a thumbnail.
 function handleApi(string $action): void
 {
@@ -26,6 +29,10 @@ function handleApi(string $action): void
     }
     if (in_array($action, ['jobs', 'convert', 'cancel'], true)) {
         handleConvertApi($action);
+        return;
+    }
+    if ($action === 'watched') {
+        handleWatchedApi();
         return;
     }
     if ($action === 'delete') {
@@ -84,6 +91,10 @@ function handleTelegramApi(string $action, string $id): void
     if ($action === 'thumb') {
         $file = tgFirstFrame($id);
         $file ? sendFile($file, 'image/jpeg') : sendJsonError(502, 'thumbnail failed');
+        return;
+    }
+    if (isset($_GET['cached']) && !file_exists(cachePath($key, 'analysed'))) {
+        sendJsonError(404, 'not analysed yet');
         return;
     }
     try {
@@ -150,6 +161,32 @@ function handleConvertApi(string $action): void
 // Anything that changes files needs POST plus a header only our own page's fetch() sends.
 // Another website can't add that header without a CORS preflight we never answer, so it can't
 // delete or convert files through the visitor's browser.
+function handleWatchedApi(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        $answer = (object) watchedVideos();
+    } elseif (!isAppPost()) {
+        sendJsonError(405, 'use POST from the app');
+        return;
+    } else {
+        $name = (string) ($_POST['v'] ?? '');
+        $on = ($_POST['on'] ?? '') === '1';
+        if ($on && videoPath($name) === null) {
+            sendJsonError(404, 'video not found');
+            return;
+        }
+        try {
+            $answer = ['watched' => markWatched($name, $on)];
+        } catch (RuntimeException $e) {
+            sendJsonError(500, $e->getMessage());
+            return;
+        }
+    }
+    header('Content-Type: application/json');
+    header('Cache-Control: no-store');
+    echo json_encode($answer, JSON_UNESCAPED_UNICODE);
+}
+
 function isAppPost(): bool
 {
     return $_SERVER['REQUEST_METHOD'] === 'POST' && ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'video-player';

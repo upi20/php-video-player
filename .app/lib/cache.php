@@ -19,7 +19,7 @@ function buildOnce(string $target, callable $build): bool
     }
     ignore_user_abort(true); // finish and cache even if the viewer moves on
     set_time_limit(0);
-    $lock = @fopen($target . '.lock', 'c');
+    $lock = @fopen(lockPath($target), 'c');
     if ($lock === false) {
         return false;
     }
@@ -35,8 +35,23 @@ function buildOnce(string $target, callable $build): bool
     }
     flock($lock, LOCK_UN);
     fclose($lock);
-    @unlink($target . '.lock');
     return file_exists($target);
+}
+
+/**
+ * Lock file for buildOnce($target). Not next to the target: flock() silently does nothing on the
+ * cache folder (a macOS bind mount in Docker Desktop), so two requests would build the same file
+ * at once. The container's own /tmp locks properly, and only this container builds. Lock files
+ * are kept, not deleted: removing one while another request waits on it would let a third
+ * request lock a new file and build alongside the second.
+ */
+function lockPath(string $target): string
+{
+    $dir = sys_get_temp_dir() . '/vid-locks';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0777, true);
+    }
+    return $dir . '/' . sha1($target) . '.lock';
 }
 
 function removePath(string $path): void

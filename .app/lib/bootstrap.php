@@ -3,9 +3,12 @@ declare(strict_types=1);
 
 // Shared setup for every request: paths, settings and the library functions.
 define('APP_DIR', dirname(__DIR__));      // .app
-define('VIDEO_DIR', dirname(__DIR__, 2)); // the folder holding the videos (also the web root)
-const CACHE_DIR = '/cache';               // generated files, mounted by docker-compose
-const MEDIA_DIR = '/media';               // the video folder again, writable: only the converter writes here
+// The videos live in data/, apart from the app's own files; Apache serves them from there.
+define('VIDEO_DIR', dirname(__DIR__, 2) . '/data');
+const VIDEO_URL = 'data/';                // URL of VIDEO_DIR, relative to the page
+const CACHE_DIR = '/cache';               // generated files only: safe to delete at any time
+const STATE_DIR = '/state';               // what the viewer did (watched...): must survive, never in CACHE_DIR
+const MEDIA_DIR = '/media';               // data/ again, writable: converter, "Simpan ke vid" and Hapus write here
 const VIDEO_EXTS = ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'ogv'];
 // Files browsers usually can't play; the Konversi page turns them into MP4.
 const CONVERT_EXTS = ['ts', 'm2ts', 'mts', 'mkv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'vob', '3gp'];

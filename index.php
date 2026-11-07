@@ -21,7 +21,11 @@ if (($_GET['page'] ?? '') === 'telegram') {
     exit;
 }
 if (($_GET['page'] ?? '') === 'tg-watch') {
-    renderPage('tg-watch', ['c' => (int) ($_GET['c'] ?? 0), 'm' => (int) ($_GET['m'] ?? 0)]);
+    renderPage('tg-watch', [
+        'c' => (int) ($_GET['c'] ?? 0),
+        'm' => (int) ($_GET['m'] ?? 0),
+        'fav' => ($_GET['list'] ?? '') === 'fav', // playing through Favorit instead of the channel
+    ]);
     exit;
 }
 

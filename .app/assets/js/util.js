@@ -99,11 +99,15 @@ export const storyboardUrl = (v, sheet) => apiUrl('storyboard', v, sheet ? `&she
 export const watchUrl = (v) => `?v=${encodeURIComponent(v.name)}`;
 
 // ---------- Watch progress ----------
+// pos: where to resume (only for videos long enough to resume); seen: the furthest share of the
+// video ever played (0–1), which the bar under each thumbnail shows, short clips included.
 export const posKey = (v) => `pos:${v.name}`;
+export const seenKey = (v) => `seen:${v.name}`;
 
 export function watchedPercent(v) {
   const pos = store.get(posKey(v), 0);
-  return v.duration && pos ? Math.min(100, (pos / v.duration) * 100) : 0;
+  const resumeAt = v.duration && pos ? pos / v.duration : 0; // positions saved before "seen" existed
+  return Math.min(100, Math.max(resumeAt, store.get(seenKey(v), 0)) * 100);
 }
 
 // ---------- Changing files ----------
@@ -192,9 +196,12 @@ export async function deleteWithConfirm(file, message) {
 export const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
 
 /** Inner HTML of a .thumb: cover image, duration badge and watched bar. */
+export const WATCHED_BADGE = '<span class="watched-badge" title="Sudah ditonton">✓ Ditonton</span>';
+
 export function thumbHtml(v) {
   const watched = watchedPercent(v);
   return `<img src="${thumbUrl(v)}" alt="" loading="lazy" decoding="async">`
     + (v.duration ? `<span class="duration">${fmtTime(v.duration)}</span>` : '')
-    + (watched ? `<span class="watched" style="width:${watched}%"></span>` : '');
+    + (watched ? `<span class="watched" style="width:${watched}%"></span>` : '')
+    + (v.watched ? WATCHED_BADGE : '');
 }

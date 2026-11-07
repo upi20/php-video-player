@@ -307,6 +307,22 @@ mark { border-radius: 3px; background: rgba(139, 123, 255, 0.35); color: inherit
   background: var(--accent);
 }
 
+/* Watched (stored on the server, so every device shows it): a badge and a dimmer thumbnail.
+   Local and Telegram videos alike; #watched is the toggle on both watch pages. */
+.watched-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.thumb:has(.watched-badge) img { opacity: .5; }
+#watched[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
 .empty {
   margin: 0;
   padding: 48px var(--gutter);

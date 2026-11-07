@@ -44,7 +44,8 @@ PHP dan ffmpeg tidak perlu dipasang di komputer, karena keduanya sudah ada di da
 ```bash
 git clone https://github.com/upi20/php-video-player.git ~/Videos/player
 cd ~/Videos/player
-# salin atau pindahkan file video ke folder ini
+mkdir -p data
+# salin atau pindahkan file video ke folder data/
 docker compose up -d
 ```
 
@@ -52,17 +53,15 @@ Buka **http://localhost:8015**.
 
 ### Folder video yang sudah ada
 
-`git clone` tidak bisa ke folder yang sudah berisi file. Untuk memasang di folder yang sudah berisi video:
+Video dibaca dari subfolder `data/`, terpisah dari file aplikasi. Untuk memakai video yang sudah ada, pindahkan ke `data/` di folder aplikasi:
 
 ```bash
-cd ~/folder-video-anda
-git init
-git remote add origin https://github.com/upi20/php-video-player.git
-git pull origin main
-docker compose up -d
+git clone https://github.com/upi20/php-video-player.git ~/Videos/player
+mv ~/folder-video-anda/* ~/Videos/player/data/
+cd ~/Videos/player && docker compose up -d
 ```
 
-`.gitignore` di repo ini memakai pola *whitelist*: semua file diabaikan kecuali kode aplikasi. Jadi video Anda dan folder `.cache` tidak akan pernah ikut ter-commit.
+`.gitignore` di repo ini memakai pola *whitelist*: semua file diabaikan kecuali kode aplikasi. Jadi video Anda (`data/`) dan folder `.cache` tidak akan pernah ikut ter-commit.
 
 ### Perintah sehari-hari
 
@@ -99,7 +98,7 @@ Buka menu **Konversi** di header. Badge di sana menunjukkan jumlah file yang bel
 | Video cocok, audio lain (misalnya PCM, AC3) | Video disalin, audio di-encode ke AAC | Beberapa detik |
 | Video lain (MPEG-4/Xvid, WMV, MPEG-2, ...) | Encode ulang ke H.264 (`libx264 -preset veryfast -crf 21`) | Kira-kira 5–20× lebih cepat dari durasi video |
 
-Hasilnya `nama.mp4` di folder yang sama. Selama proses, file ditulis sebagai `.nama.mp4.part` (tersembunyi), lalu diganti nama setelah selesai. Jadi file setengah jadi tidak pernah muncul di daftar video. Kalau `nama.mp4` sudah ada, file itu dianggap sudah dikonversi dan tidak akan ditimpa.
+Hasilnya `nama.mp4` di folder yang sama (`data/`). Selama proses, file ditulis sebagai `.nama.mp4.part` (tersembunyi), lalu diganti nama setelah selesai. Jadi file setengah jadi tidak pernah muncul di daftar video. Kalau `nama.mp4` sudah ada, file itu dianggap sudah dikonversi dan tidak akan ditimpa.
 
 Setiap konversi dijalankan sebagai proses terpisah (`setsid`) dan diantrekan dengan `flock`, jadi hanya satu ffmpeg yang berjalan pada satu waktu. Statusnya disimpan di `.cache/jobs/`. Kalau container di-restart di tengah konversi, file itu ditandai gagal dan bisa diulang dengan tombol **Coba lagi**.
 
@@ -188,10 +187,10 @@ Mengubah ukuran thumbnail atau pratinjau tidak memengaruhi cache yang sudah ada.
 
 ## Keamanan
 
-- Apache menyajikan folder video dari mount **read-only**. Folder yang sama di-mount sekali lagi di `/media` dengan akses tulis, **khusus untuk converter**. Mount ini dipakai converter untuk menambahkan MP4 baru (tanpa pernah menimpa file), dan oleh tombol **Hapus**, yang selalu meminta konfirmasi dan hanya bisa menghapus file video di folder ini. Kalau tidak butuh fitur Konversi dan Hapus, hapus baris `- ./:/media` di `docker-compose.yml`, maka seluruh folder kembali read-only (kecuali `.cache/`).
+- Apache menyajikan aplikasi dan folder video (`data/`) dari mount **read-only**. Hanya `data/` yang di-mount sekali lagi di `/media` dengan akses tulis. Mount ini dipakai converter untuk menambahkan MP4 baru (tanpa pernah menimpa file), oleh **Simpan ke vid** dari Telegram, dan oleh tombol **Hapus**, yang selalu meminta konfirmasi dan hanya bisa menghapus file video di `data/`. File aplikasi tidak pernah bisa ditulis. Kalau tidak butuh fitur-fitur itu, hapus baris `- ./data:/media` di `docker-compose.yml`, maka video kembali read-only.
 - Secara default port hanya terbuka untuk `127.0.0.1`, jadi tidak bisa diakses dari perangkat lain.
-- Apache hanya menyajikan `index.php`, `.app/assets/`, dan file video. `.app/lib`, `.app/views`, `.cache`, `.docker`, `.git`, file tersembunyi, serta file konfigurasi ditolak (403).
-- Nama file dari URL divalidasi: harus berupa file video di folder ini, tanpa path, dan bukan file tersembunyi.
+- Apache hanya menyajikan `index.php`, `.app/assets/`, dan file video di `data/`. `.app/lib`, `.app/views`, `.cache`, `.docker`, `.git`, file tersembunyi, serta file konfigurasi ditolak (403).
+- Nama file dari URL divalidasi: harus berupa file video di `data/`, tanpa path, dan bukan file tersembunyi.
 - ffmpeg dijalankan tanpa shell (`proc_open` dengan array argumen), jadi nama file yang aneh tidak bisa menyisipkan perintah.
 
 ## Batasan

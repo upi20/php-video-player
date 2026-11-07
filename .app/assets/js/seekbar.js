@@ -3,6 +3,8 @@
 import { $, clock, loudnessUrl, storyboardUrl } from './util.js';
 
 const LOUD = 0.8; // top share of this video's loudness range that is marked as loud
+const BUFFER_BEFORE_ANALYSIS_S = 30; // see waitForBuffer()
+const DEFER_ANALYSIS_S = 20;
 const BAR_W = 3;
 const BAR_GAP = 1;
 const MIN_BAR_H = 3;
@@ -23,12 +25,16 @@ export function createSeekbar(video) {
   const wave = { norm: null, step: 0.5 };
   const board = { video: null, meta: null };
   const requests = new Map(); // url -> Promise of parsed JSON
+  // Requests made for the video on screen (and the next one); dropped when another one is loaded,
+  // so they don't hold connections the new video needs.
+  let aborter = new AbortController();
   let current = null;
   let dragging = false;
 
   function getJson(url) {
     if (!requests.has(url)) {
-      const request = fetch(url).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
+      const request = fetch(url, { signal: aborter.signal })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
       request.catch(() => requests.delete(url));
       requests.set(url, request);
     }
@@ -109,6 +115,7 @@ export function createSeekbar(video) {
     ui.status.classList.toggle('busy', kind === 'busy');
     ui.status.innerHTML = {
       busy: '<span class="label">Menganalisis suara…</span>',
+      waiting: '<span class="label">Analisis suara dimulai sebentar lagi…</span>',
       ready: '<span class="dot"></span><span class="label">Suara keras</span>',
       none: '<span class="label">Tanpa audio</span>',
       error: '<span class="label">Analisis suara gagal</span>',
@@ -135,6 +142,8 @@ export function createSeekbar(video) {
   // ----- Loading -----
   /** Shows video v's loudness map and previews; then prepares `next` in the background. */
   function load(v, next) {
+    aborter.abort();
+    aborter = new AbortController();
     current = v;
     wave.norm = null;
     board.video = v;
@@ -145,9 +154,62 @@ export function createSeekbar(video) {
       draw();
       return;
     }
-    setStatus('busy');
     draw();
+    if (!v.deferAnalysis) {
+      analyse(v, next);
+      return;
+    }
+    // A big Telegram video streams straight from Telegram, and analysing it means downloading it
+    // whole: doing both from the start slows the stream down. Unless it was analysed before (then
+    // it's instant), let playback get ahead first.
+    setStatus('waiting');
+    fetch(`${loudnessUrl(v)}&cached=1`).then((r) => {
+      r.body?.cancel(); // unread, the response would keep one of the browser's few connections busy
+      return r.ok;
+    }, () => false).then((cached) => {
+      if (current !== v) return;
+      if (cached) analyse(v, next);
+      else waitForBuffer(v, () => analyse(v, next));
+    });
+  }
 
+  /**
+   * Calls done() once playback has a head start: DEFER_ANALYSIS_S seconds after the video first
+   * plays (wall clock: pausing or seeking doesn't reset it), or sooner when
+   * BUFFER_BEFORE_ANALYSIS_S seconds after the playhead are buffered (or the buffer reaches the
+   * end). Nothing happens if another video is loaded meanwhile.
+   */
+  function waitForBuffer(v, done) {
+    const events = ['progress', 'timeupdate', 'playing', 'ended'];
+    let timer = null;
+    const finish = () => {
+      stop();
+      if (current === v) done();
+    };
+    const check = (e) => {
+      if (current !== v) return stop();
+      // From when it really plays: not paused, but still waiting for data, doesn't count.
+      if (!timer && (e?.type === 'playing' || (!video.paused && video.readyState >= 3))) {
+        timer = setTimeout(finish, DEFER_ANALYSIS_S * 1000);
+      }
+      if (!video.duration) return;
+      const t = video.currentTime;
+      let ahead = 0;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= t + 0.5 && video.buffered.end(i) >= t) ahead = video.buffered.end(i) - t;
+      }
+      if (video.ended || ahead >= Math.min(BUFFER_BEFORE_ANALYSIS_S, video.duration - t - 0.5)) finish();
+    };
+    const stop = () => {
+      clearTimeout(timer);
+      events.forEach((e) => video.removeEventListener(e, check));
+    };
+    events.forEach((e) => video.addEventListener(e, check));
+    check();
+  }
+
+  function analyse(v, next) {
+    setStatus('busy');
     const loudness = getJson(loudnessUrl(v)).then((data) => {
       if (current !== v) return;
       setLoudness(data);
@@ -168,8 +230,9 @@ export function createSeekbar(video) {
   }
 
   function prefetch(v) {
-    // Not for Telegram videos: that would download the whole next video in the background.
-    if (v.remote || v.item) return;
+    // A big Telegram video would be downloaded whole in the background: only small ones, which the
+    // tg module then plays from that same download (toVideo() in tg.js).
+    if (v.remote || v.prefetch === false) return;
     getJson(loudnessUrl(v)).catch(() => {});
     getJson(storyboardUrl(v)).catch(() => {});
   }

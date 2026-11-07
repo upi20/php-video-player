@@ -26,6 +26,13 @@ $data = [];
 
   <section class="tg-browser" id="tg-browser" hidden>
     <div class="tg-toolbar" id="tg-toolbar">
+      <!-- Phones: one summary line; tapping it drops the filters down over the grid -->
+      <button class="tg-summary" id="tg-summary" type="button" aria-expanded="false" aria-controls="tg-filters">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        <span class="tg-summary-text" id="tg-summary-text">Memuat…</span>
+        <svg class="tg-summary-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="tg-filters" id="tg-filters">
       <div class="tg-pins" id="tg-pins" role="toolbar" aria-label="Channel yang disematkan" hidden></div>
       <div class="tg-channel-row">
         <select class="tg-select" id="tg-channel" aria-label="Pilih channel"></select>
@@ -44,6 +51,7 @@ $data = [];
         <span id="tg-account"></span>
         <button class="btn ghost" id="tg-logout">Keluar</button>
       </span>
+      </div>
     </div>
     <ul class="grid" id="tg-grid"></ul>
     <p class="empty" id="tg-empty" hidden></p>

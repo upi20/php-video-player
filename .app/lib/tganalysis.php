@@ -2,8 +2,9 @@
 declare(strict_types=1);
 
 // Loudness map and hover previews for Telegram videos (?api=loudness|storyboard&tg=<c>_<m>).
-// The tg module downloads the video once into the shared cache, it is analysed exactly like a
-// local file (loudness.php, storyboard.php), then the copy is removed; only the results stay.
+// The tg module downloads the video once into the shared cache, and it is analysed exactly like
+// a local file (loudness.php, storyboard.php). The copy stays: the tg module streams the video
+// from it too, and deletes the least recently played copies itself.
 const TG_MODULE = 'http://tg:8080';
 const TG_ANALYSE_MAX_BYTES = 300 * 1024 * 1024; // bigger videos: save them to the folder first
 const TG_THUMB_DIR = CACHE_DIR . '/tg';         // shared with the tg module's own thumbnails
@@ -39,12 +40,8 @@ function tgAnalyse(string $id, string $key): void
             $error = new RuntimeException('Video Telegram gagal diunduh', 502);
             return false;
         }
-        try {
-            loudnessFile($copy, $key);
-            storyboardDir($copy, $key, videoInfo($copy, $key)['duration']);
-        } finally {
-            @unlink($copy);
-        }
+        loudnessFile($copy, $key);
+        storyboardDir($copy, $key, videoInfo($copy, $key)['duration']);
         return file_put_contents($tmp, '1') !== false;
     });
     if ($error) {
@@ -63,6 +60,12 @@ function tgFirstFrame(string $id): ?string
         @mkdir(TG_THUMB_DIR, 0775, true);
     }
     $file = TG_THUMB_DIR . "/{$c}_{$m}.jpg";
+    // A video ffmpeg can't read (e.g. a broken upload) would be tried again for every card shown:
+    // remember the failure for an hour.
+    $failed = "$file.failed";
+    if (!is_file($file) && is_file($failed) && time() - filemtime($failed) < 3600) {
+        return null;
+    }
     $built = buildOnce($file, function (string $tmp) use ($c, $m): bool {
         [$code] = runProcess([
             'ffmpeg', '-nostdin', '-v', 'error', '-i', TG_MODULE . "/stream/$c/$m",
@@ -71,12 +74,15 @@ function tgFirstFrame(string $id): ?string
         ]);
         return $code === 0 && is_file($tmp) && filesize($tmp) > 0;
     });
+    if (!$built) {
+        @touch($failed);
+    }
     return $built ? $file : null;
 }
 
 /**
- * Asks the tg module to download the whole video into the shared cache (CACHE_DIR/tgtmp), which
- * is much faster than reading its stream. Returns the file's path; the caller deletes it.
+ * Asks the tg module for the whole video in the shared cache (CACHE_DIR/tgtmp), downloading it
+ * when needed, which is much faster than reading its stream. Returns the file's path.
  */
 function tgDownload(int $c, int $m): ?string
 {

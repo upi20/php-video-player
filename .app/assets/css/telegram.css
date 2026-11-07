@@ -63,6 +63,58 @@
   backdrop-filter: blur(14px);
 }
 
+/* Wide screens: the filters are laid out in the toolbar itself, no summary line. */
+.tg-filters { display: contents; }
+.tg-summary { display: none; }
+
+/* Phones: the toolbar is one summary line; when open, the filters drop down over the grid
+   (absolute, so the grid doesn't move and the sticky toolbar keeps its height). */
+/* Watch page playlist: "Muat video yang lebih baru" on top. Videos added there keep the list
+   in place by hand (tg-watch.js), so the browser's own scroll anchoring must not add to it. */
+.page-tg-watch .list { overflow-anchor: none; }
+.list-newer { display: flex; justify-content: center; padding: 8px; }
+.list-newer[hidden] { display: none; }
+
+@media (max-width: 767px) {
+  .tg-toolbar { padding: 6px var(--gutter); }
+  .tg-summary {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+  }
+  .tg-summary svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
+  .tg-summary-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tg-summary-chevron { transition: transform .15s; }
+  .tg-toolbar.open .tg-summary-chevron { transform: rotate(180deg); }
+
+  .tg-filters {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 4px var(--gutter) 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  }
+  .tg-toolbar:not(.open) .tg-filters { display: none; }
+}
+
 /* Pinned channels: a row of chips, scrollable sideways on small screens */
 .tg-pins {
   display: flex;
@@ -154,6 +206,74 @@
   font-size: 11px;
   font-weight: 700;
 }
+
+/* Duplicate of an older post in the channel (same size and duration) */
+.dup-tag {
+  display: inline-block;
+  margin-right: 2px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 176, 32, 0.16);
+  color: var(--loud);
+  font-size: 0.92em;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.chip.dup-chip { background: rgba(255, 176, 32, 0.16); color: var(--loud); }
+a.chip.dup-chip:hover { text-decoration: underline; }
+
+/* Favorit */
+.tg-liked {
+  position: absolute;
+  bottom: 9px;
+  left: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.75);
+  color: #ff4d6d;
+  font-size: 12px;
+  line-height: 1;
+}
+.tg-like[aria-pressed="true"] { border-color: #ff4d6d; color: #ff4d6d; }
+.tg-like[aria-pressed="true"] svg { fill: currentColor; }
+/* ❤ on a grid card, over the thumbnail's bottom-left corner (where the badge is elsewhere). The
+   card is as wide as its thumbnail, so the thumbnail is 9/16 of the card's width tall. */
+#tg-grid .card-wrap { container-type: inline-size; }
+#tg-grid .tg-liked { display: none; }
+.tg-card-like {
+  position: absolute;
+  top: calc(100cqw * 9 / 16 - 44px);
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  transition: opacity .15s, transform .15s;
+}
+.tg-card-like svg { width: 18px; height: 18px; }
+.tg-card-like[aria-pressed="true"] { color: #ff4d6d; }
+.tg-card-like[aria-pressed="true"] svg { fill: currentColor; }
+.tg-card-like:active { transform: scale(.88); }
+.tg-card-like:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
+
+/* Touch: always there. Mouse: liked ones stay visible, the rest show on hover. */
+@media (hover: hover) {
+  .tg-card-like[aria-pressed="false"] { opacity: 0; }
+  .card-wrap:hover .tg-card-like { opacity: 1; }
+  .tg-card-like:hover { transform: scale(1.08); }
+}
+
+.chip-btn.tg-fav-chip { flex: none; }
+.chip-btn.tg-fav-chip::before { content: "❤ "; color: #ff4d6d; }
 
 /* ---------- Watch page extras ---------- */
 .tg-channel {

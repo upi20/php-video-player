@@ -9,11 +9,15 @@ services:
     volumes:
       - ./:/var/www/html:ro
       - ./.docker/apache.conf:/etc/apache2/conf-enabled/zz-vid.conf:ro
-      # The same folder, writable, used only by the converter (Konversi page) to add new MP4s.
-      # It never overwrites or deletes files. Remove this line to keep the folder read-only.
-      - ./:/media
-      # Thumbnails, loudness maps, previews and conversion jobs.
+      - ./.docker/php.ini:/usr/local/etc/php/conf.d/zz-vid.ini:ro
+      # The video folder (data/), writable: the converter adds MP4s here and Hapus deletes.
+      # Nothing is ever overwritten. Remove this line to keep the videos read-only.
+      - ./data:/media
+      # Thumbnails, loudness maps, previews and conversion jobs: all made again when needed, so
+      # this folder can be deleted at any time.
       - ./.cache:/cache
+      # What you did that can't be made again (videos marked as watched). Keep it; back it up.
+      - ./.state:/state
     restart: unless-stopped
 
   # Telegram module: streams videos from channels you joined and saves them here.
@@ -27,7 +31,8 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./:/media
+      # "Simpan ke vid" downloads into the video folder.
+      - ./data:/media
       - ./.app/tg/server.php:/app/server.php:ro
       # Telegram thumbnails are cached here (.cache/tg) after the first fetch.
       - ./.cache:/cache

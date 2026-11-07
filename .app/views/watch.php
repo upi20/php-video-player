@@ -20,6 +20,9 @@ $data = ['videos' => $videos, 'current' => $current['name']];
           <button class="btn" id="next" title="Berikutnya (N)">
             <span class="label">Berikutnya</span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
           </button>
+          <button class="btn" id="watched" aria-pressed="false" title="Tandai sudah/belum ditonton (W)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span class="label">Tandai ditonton</span>
+          </button>
           <button class="btn danger-ghost" id="delete" title="Hapus video ini dari folder">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span class="label">Hapus</span>
           </button>
@@ -37,6 +40,7 @@ $data = ['videos' => $videos, 'current' => $current['name']];
         <li><kbd>↑</kbd><kbd>↓</kbd> volume</li>
         <li><kbd>T</kbd> mode bioskop</li>
         <li><kbd>F</kbd> layar penuh</li>
+        <li><kbd>R</kbd> putar gambar</li>
         <li><kbd>M</kbd> bisu</li>
         <li><kbd>N</kbd><kbd>P</kbd> berikutnya/sebelumnya</li>
         <li><kbd>/</kbd> cari</li>

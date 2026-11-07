@@ -24,6 +24,7 @@
       <span class="c-spacer"></span>
       <span class="c-status" id="c-status"></span>
       <button class="cbtn c-speed" id="c-speed" title="Kecepatan putar">1×</button>
+      <button class="cbtn" id="c-rotate" title="Putar gambar 90° (R)"></button>
       <button class="cbtn" id="c-theater" title="Mode bioskop (T)"></button>
       <button class="cbtn" id="c-full" title="Layar penuh (F)"></button>
     </div>

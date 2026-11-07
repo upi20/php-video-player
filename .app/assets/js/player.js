@@ -15,6 +15,7 @@ const ICONS = {
   muted: svg('<path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor"/><path d="m16 9 6 6M22 9l-6 6"/>', STROKE),
   enterFull: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', STROKE),
   exitFull: svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>', STROKE),
+  rotate: svg('<path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/>', STROKE),
 };
 
 export function createPlayer() {
@@ -22,7 +23,7 @@ export function createPlayer() {
   const video = $('video');
   const ui = {
     bar: $('controls-bar'), play: $('c-play'), mute: $('c-mute'), volume: $('c-volume'), time: $('c-time'),
-    speed: $('c-speed'), full: $('c-full'), bigPlay: $('big-play'), spinner: $('spinner'),
+    speed: $('c-speed'), full: $('c-full'), rotate: $('c-rotate'), bigPlay: $('big-play'), spinner: $('spinner'),
   };
   const seekbar = createSeekbar(video);
   let loaded = false;
@@ -53,9 +54,22 @@ export function createPlayer() {
     }
   }
 
+  // The whole player (with our controls) where the browser allows it; older Safari only has the
+  // webkit-prefixed version, and iPhone Safari can only put the <video> itself in fullscreen,
+  // with its own controls.
+  const fullscreenElement = () => document.fullscreenElement ?? document.webkitFullscreenElement ?? null;
+
   function toggleFullscreen() {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else root.requestFullscreen?.().catch(() => {});
+    if (fullscreenElement()) {
+      (document.exitFullscreen ?? document.webkitExitFullscreen)?.call(document);
+      return;
+    }
+    // No screen.orientation.lock() here: Chrome on Android shows its "drag from top to exit"
+    // toast again on every layout change, and rotating right after entering fullscreen seemed
+    // to keep it on screen, over the controls.
+    if (root.requestFullscreen) root.requestFullscreen().catch(() => {});
+    else if (root.webkitRequestFullscreen) root.webkitRequestFullscreen();
+    else video.webkitEnterFullscreen?.();
   }
 
   // ----- Rendering: every frame while playing (smooth playhead), on events otherwise -----
@@ -147,6 +161,20 @@ export function createPlayer() {
   });
   ui.mute.addEventListener('click', toggleMute);
 
+  /**
+   * Starts playing right away, with sound. Browsers may refuse that before the viewer touched the
+   * page (iPhone Safari does on a freshly opened page); the video then waits for a tap on play,
+   * never muted. Resolves to 'playing', 'blocked' or null (e.g. another video was loaded meanwhile).
+   */
+  async function autoplay() {
+    try {
+      await video.play();
+      return 'playing';
+    } catch (err) {
+      return err.name === 'NotAllowedError' ? 'blocked' : null;
+    }
+  }
+
   // ----- Speed -----
   ui.speed.addEventListener('click', () => {
     const next = SPEEDS[(SPEEDS.indexOf(video.playbackRate) + 1) % SPEEDS.length];
@@ -155,15 +183,45 @@ export function createPlayer() {
   });
   video.addEventListener('ratechange', () => { ui.speed.textContent = `${video.playbackRate}×`; });
 
+  // ----- Rotation (remembered per video) -----
+  // Turns the picture inside the player box, a quarter at a time. A quarter turn swaps width and
+  // height, so the CSS sizes the video to the box turned sideways (--pw/--ph, kept up to date here).
+  let rotation = 0;
+  let rotationKey = null;
+
+  function applyRotation() {
+    root.style.setProperty('--rot', `${rotation}deg`);
+    root.classList.toggle('turned', rotation !== 0);
+    root.classList.toggle('sideways', rotation % 180 !== 0);
+    ui.rotate.classList.toggle('on', rotation !== 0);
+    ui.rotate.title = rotation ? `Putar gambar 90° (R) · sekarang ${rotation}°` : 'Putar gambar 90° (R)';
+  }
+
+  function rotate() {
+    if (!loaded) return;
+    rotation = (rotation + 90) % 360;
+    if (rotation) store.set(rotationKey, rotation);
+    else store.del(rotationKey);
+    applyRotation();
+  }
+
+  new ResizeObserver(() => {
+    root.style.setProperty('--pw', `${root.clientWidth}px`);
+    root.style.setProperty('--ph', `${root.clientHeight}px`);
+  }).observe(root);
+  ui.rotate.innerHTML = ICONS.rotate;
+  ui.rotate.addEventListener('click', rotate);
+
   // ----- Fullscreen -----
   function syncFullscreen() {
-    const full = Boolean(document.fullscreenElement);
+    const full = Boolean(fullscreenElement());
     ui.full.innerHTML = full ? ICONS.exitFull : ICONS.enterFull;
     ui.full.title = full ? 'Keluar layar penuh (F)' : 'Layar penuh (F)';
     requestAnimationFrame(seekbar.draw);
   }
   ui.full.addEventListener('click', toggleFullscreen);
   document.addEventListener('fullscreenchange', syncFullscreen);
+  document.addEventListener('webkitfullscreenchange', syncFullscreen);
 
   syncVolume();
   syncPlayState();
@@ -174,9 +232,14 @@ export function createPlayer() {
     /** Plays video v; `next` is prepared in the background (loudness map, previews). */
     load(v, next) {
       loaded = true;
+      rotationKey = `rot:${v.name}`;
+      rotation = store.get(rotationKey, 0);
+      applyRotation();
       video.src = v.url;
       seekbar.load(v, next);
     },
+    rotate,
+    autoplay,
     togglePlay,
     seekBy,
     changeVolume,

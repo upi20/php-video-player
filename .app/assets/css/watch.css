@@ -1,8 +1,8 @@
-/* Watch page. Mobile first: the player sticks to the top while the playlist scrolls beneath it;
-   from 1024px it becomes video left + playlist right, with an optional theater mode. */
+/* Watch page. Mobile first: the header and, right below it, the player stick to the top while
+   the playlist scrolls beneath them (so Home is always one tap away); from 1024px it becomes
+   video left + playlist right, with an optional theater mode. */
 
 /* ---------- Layout ---------- */
-.page-watch .topbar { position: relative; } /* on phones the player, not the header, stays on top */
 
 .watch {
   display: grid;
@@ -20,7 +20,7 @@
 /* ---------- Player ---------- */
 .player {
   position: sticky;
-  top: 0;
+  top: var(--header-h); /* below the sticky header */
   z-index: 25;
   grid-area: player;
   width: 100%;
@@ -38,7 +38,22 @@
   background: #000;
 }
 
+/* Turned by the viewer (R): the video element is centred and rotated; on a quarter turn it is
+   sized to the player box turned sideways, so object-fit still fits the whole picture. */
+.player.turned video {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--pw, 100%);
+  height: var(--ph, 100%);
+  transform: translate(-50%, -50%) rotate(var(--rot));
+}
+.player.turned.sideways video { width: var(--ph, 100%); height: var(--pw, 100%); }
+#c-rotate.on { color: var(--accent); }
+
 .player:fullscreen { max-height: none; border-radius: 0; }
+/* Older Safari: its own name, in a separate rule (an unknown selector would drop the whole rule) */
+.player:-webkit-full-screen { max-height: none; border-radius: 0; }
 .player.idle { cursor: none; }
 
 .big-play {
@@ -475,8 +490,6 @@
 
 /* ---------- Desktop: video left, playlist right ---------- */
 @media (min-width: 1024px) {
-  .page-watch .topbar { position: sticky; }
-
   .watch {
     grid-template-columns: minmax(0, 1fr) 360px;
     grid-template-rows: auto 1fr;
@@ -491,6 +504,7 @@
 
   .player {
     position: relative;
+    top: auto; /* the phone's sticky offset would push a relative player down */
     z-index: auto;
     max-height: calc(100vh - var(--header-h) - 170px);
     min-height: 240px;

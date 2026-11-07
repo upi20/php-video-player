@@ -1,6 +1,6 @@
 // Pieces shared by both watch pages (local videos and Telegram), all working on the DOM of
 // views/partials/player.php: toast, up-next countdown, resume/progress, theater mode, shortcuts.
-import { $, fmtTime, posKey, store } from './util.js';
+import { $, fmtTime, posKey, seenKey, store } from './util.js';
 
 const UPNEXT_SECONDS = 5;
 
@@ -75,13 +75,46 @@ export function createUpNext({ go, thumbUrl }) {
   return { show, hide };
 }
 
+// ---------- Autoplay ----------
+/** Plays the loaded video with sound; when the browser holds it back, one tap starts it. */
+export async function autoplay(player, toast) {
+  if (await player.autoplay() !== 'blocked') return;
+  toast.show('Browser menahan autoplay bersuara', 'Putar', () => {
+    player.video.play().catch(() => {});
+    toast.hide();
+  });
+}
+
+// ---------- Watched ----------
+// Played this long (or half of a shorter video) → it counts as watched. Short clips are common,
+// so "played it once" is the useful mark; the resume bar never shows for them.
+const WATCHED_AFTER_S = 2;
+
+/** Calls onWatched(v) (on every timeupdate) once the current video has really played long enough. */
+export function onPlayedEnough(video, { current, onWatched }) {
+  video.addEventListener('timeupdate', () => {
+    const v = current();
+    if (v && video.duration && !video.paused && video.currentTime >= Math.min(WATCHED_AFTER_S, video.duration / 2)) {
+      onWatched(v);
+    }
+  });
+}
+
 // ---------- Resume, saved progress, playback errors ----------
+const RECOVER_TRIES = 6;
+const RECOVER_STALL_MS = 15000; // waiting this long for data while playing counts as a broken stream
+
 /**
  * Remembers the position of each video (keyed by posKey(v), so v needs a unique `name`) and
  * resumes it next time. onProgress(v) runs after each save, e.g. to update a watched bar.
+ * recover: the source is a stream that can break (Telegram, through the tg module, which may be
+ * restarting or lose its connection): reconnect a few times and go on where it stopped.
  */
-export function setupPlayback(video, { current, toast, onProgress = () => {} }) {
+export function setupPlayback(video, { current, toast, onProgress = () => {}, recover = false }) {
+  let recovering = false;
+
   video.addEventListener('loadedmetadata', () => {
+    if (recovering) return; // reconnecting: it continues where it broke off, see reconnect()
     const v = current();
     const pos = store.get(posKey(v), 0);
     if (pos > 10 && pos < video.duration - 15) {
@@ -103,7 +136,14 @@ export function setupPlayback(video, { current, toast, onProgress = () => {} }) 
     const t = video.currentTime;
     if (t > video.duration - 15) store.del(posKey(v));
     else if (t > 10) store.set(posKey(v), t);
+    // Only what was really played: seeking ahead while paused doesn't count.
+    if (!video.seeking && (!video.paused || force)) markSeen(v, t / video.duration);
     onProgress(v);
+  }
+
+  function markSeen(v, share) {
+    const seen = Math.min(1, Math.round(share * 1000) / 1000);
+    if (seen > store.get(seenKey(v), 0)) store.set(seenKey(v), seen);
   }
 
   video.addEventListener('timeupdate', () => savePosition(false));
@@ -111,11 +151,114 @@ export function setupPlayback(video, { current, toast, onProgress = () => {} }) 
   window.addEventListener('pagehide', () => savePosition(true));
   video.addEventListener('ended', () => {
     store.del(posKey(current()));
+    markSeen(current(), 1);
     onProgress(current());
   });
+  // ----- Reconnecting a broken stream -----
+  let tries = 0;
+  let lastTime = 0;    // where it was when it broke
+  let wantsPlay = false;
+  let stallTimer = null;
+  let reloadedAt = null; // position a reconnect resumed at, once it loaded fine
+  let started = false;    // it has played: a stall from then on is a broken stream, not a slow start
+
+  video.addEventListener('timeupdate', () => {
+    if (!recovering && !video.seeking && video.currentTime > 0) lastTime = video.currentTime;
+  });
+  video.addEventListener('play', () => { wantsPlay = true; });
+  video.addEventListener('pause', () => {
+    if (!recovering) wantsPlay = false;
+  });
+  video.addEventListener('emptied', () => {
+    if (recovering) return;
+    clearTimeout(stallTimer);
+    tries = 0; // another video: a fresh start
+    lastTime = 0;
+    reloadedAt = null;
+    started = false;
+  });
+  video.addEventListener('playing', () => {
+    started = true;
+    clearTimeout(stallTimer);
+    if (!recovering && tries) {
+      tries = 0;
+      toast.show('Tersambung lagi');
+    }
+  });
+  if (recover) {
+    video.addEventListener('waiting', () => {
+      clearTimeout(stallTimer);
+      if (!started) return; // still starting (a big video can take a while): not stuck
+      stallTimer = setTimeout(() => {
+        if (!video.paused && video.readyState < 3) streamFailed(false);
+      }, RECOVER_STALL_MS);
+    });
+  }
+
+  /** Loads the same source again and continues at `at` (playing if it was). */
+  function reload(at, play, then = () => {}) {
+    const src = video.getAttribute('src');
+    recovering = true;
+    video.addEventListener('loadedmetadata', () => {
+      video.currentTime = Math.min(at, Math.max(0, video.duration - 0.5));
+      recovering = false;
+      then();
+      if (play) video.play().catch(() => {});
+    }, { once: true });
+    video.src = src;
+  }
+
+  function reconnect() {
+    const v = current();
+    const src = video.getAttribute('src');
+    if (!src || tries >= RECOVER_TRIES) return false;
+    tries++;
+    recovering = true;
+    const at = lastTime;
+    const play = wantsPlay;
+    toast.show(`Koneksi video terputus, menyambung lagi… (${tries}/${RECOVER_TRIES})`);
+    setTimeout(() => {
+      if (current() !== v || video.getAttribute('src') !== src) {
+        recovering = false;
+        return;
+      }
+      reload(at, play, () => { reloadedAt = at; });
+    }, 2000 * tries);
+    return true;
+  }
+
+  /** The file itself is broken around here (e.g. bad audio data): offer to jump past it. */
+  function showBroken() {
+    recovering = false;
+    const at = lastTime;
+    toast.show(`Bagian video ini rusak (sekitar ${fmtTime(at) || '0:00'}).`, 'Lewati 5 dtk', () => {
+      toast.hide();
+      lastTime = at + 5;
+      reload(at + 5, true);
+    }, true);
+  }
+
+  /**
+   * The stream failed (an error, or stuck while playing). Bad data, not a lost connection, when
+   * the browser says it can't decode it, or when it fails again at the same place right after a
+   * reconnect that loaded fine: reconnecting would only hit that spot again. Returns whether it
+   * was handled.
+   */
+  function streamFailed(decodeError) {
+    if (decodeError || (reloadedAt !== null && Math.abs(lastTime - reloadedAt) < 3)) {
+      showBroken();
+      return true;
+    }
+    return reconnect();
+  }
+
   video.addEventListener('error', () => {
     if (!video.getAttribute('src')) return;
-    toast.show('Video ini tidak bisa diputar di browser (format/codec tidak didukung).', null, null, true);
+    if (recover && streamFailed(video.error?.code === MediaError.MEDIA_ERR_DECODE)) return;
+    recovering = false;
+    toast.show(recover
+      ? 'Video tidak bisa diputar: koneksi ke Telegram gagal, atau format/codec-nya tidak didukung browser.'
+      : 'Video ini tidak bisa diputar di browser (format/codec tidak didukung).', null, null, true);
   });
 }
 
@@ -161,6 +304,7 @@ export function setupShortcuts(player, extra = {}) {
     ArrowUp: () => player.changeVolume(0.1),
     ArrowDown: () => player.changeVolume(-0.1),
     f: player.toggleFullscreen,
+    r: player.rotate,
     m: player.toggleMute,
     ...extra,
   };
