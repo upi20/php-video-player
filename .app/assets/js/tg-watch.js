@@ -1,9 +1,13 @@
 // Watch page for a Telegram video: streams it through the tg module (seekable), lists the
 // channel's other videos (or, from Favorit, the liked videos of every channel), and saves the
 // current one into the video folder in the background.
-import { $, appData, escapeHtml, fmtSize, fmtTime, fmtAgo, posKey, seenKey, store, WATCHED_BADGE, watchedPercent } from './util.js';
+import { $, appData, escapeHtml, fmtSize, fmtTime, fmtWhen, posKey, seenKey, store, WATCHED_BADGE, watchedPercent } from './util.js';
 import { createPlayer } from './player.js';
-import { autoplay, createToast, createUpNext, onPlayedEnough, setupPlayback, setupShortcuts, setupTheater } from './stage.js';
+import { tgSettings } from './seekbar.js';
+import {
+  autoplay, backShortcuts, createToast, createUpNext, onPlayedEnough, pushVideo, setupPlayback, setupShortcuts,
+  setupTheater,
+} from './stage.js';
 import {
   autoLoadMore, LIKED_BADGE, telegramLink, tgApi, tgMeta, tgThumbHtml, tgThumbUrl, tgTitleHtml, tgWatchUrl, toVideo,
 } from './tg.js';
@@ -25,6 +29,12 @@ const toast = createToast();
 const upnext = createUpNext({ go, thumbUrl: (v) => tgThumbUrl(v.item) });
 
 const { fav } = appData; // true: the playlist is Favorit, with videos from several channels
+// The grid's order (?s=, &seed=, see telegram.js): the playlist, "next" and going back follow it.
+const pageParams = new URLSearchParams(location.search);
+const listSort = !fav && pageParams.get('s')
+  ? { sort: pageParams.get('s'), ...(pageParams.get('seed') ? { seed: pageParams.get('seed') } : {}) }
+  : {};
+const sortSuffix = listSort.sort ? `&s=${listSort.sort}${listSort.seed ? `&seed=${listSort.seed}` : ''}` : '';
 let channel = null;        // {title, username} of the channel opened (not used for Favorit)
 let current = null;        // toVideo(item)
 const items = [];          // the playlist loaded so far
@@ -40,7 +50,7 @@ const keyOf = (item) => `${item.c}:${item.m}`;
 const newer = document.createElement('li');
 newer.className = 'list-newer';
 newer.hidden = true;
-newer.innerHTML = '<button class="btn">Muat video yang lebih baru</button>';
+newer.innerHTML = `<button class="btn">${listSort.sort ? 'Muat video sebelumnya di daftar' : 'Muat video yang lebih baru'}</button>`;
 els.list.append(newer);
 const newerBtn = newer.querySelector('button');
 // "Muat lebih banyak" is the list's last item: on wide screens the list scrolls by itself, and
@@ -104,6 +114,7 @@ function itemLi(item) {
       <div class="item-meta">${meta}</div>
     </div>`;
   btn.addEventListener('click', () => go(toVideo(item)));
+  btn.dataset.key = keyOf(item);
   itemEls.set(keyOf(item), btn);
   li.append(btn);
   return li;
@@ -121,8 +132,8 @@ async function loadMore() {
       revealActive(false);
     } else {
       const params = opened
-        ? { c: appData.c, offset: nextOffset }
-        : { c: appData.c, offset: appData.m, add: -(NEWER_AROUND + 1), limit: NEWER_AROUND + 1 + 40 };
+        ? { c: appData.c, offset: nextOffset, ...listSort }
+        : { c: appData.c, offset: appData.m, add: -(NEWER_AROUND + 1), limit: NEWER_AROUND + 1 + 40, ...listSort };
       const page = await tgApi(`videos?${new URLSearchParams(params)}`);
       appendItems(page.items);
       nextOffset = page.next;
@@ -148,7 +159,7 @@ async function loadNewer() {
   newerBtn.disabled = true;
   try {
     const page = await tgApi(`videos?${new URLSearchParams({
-      c: appData.c, offset: items[0].m, add: -(NEWER_PAGE + 1), limit: NEWER_PAGE,
+      c: appData.c, offset: items[0].m, add: -(NEWER_PAGE + 1), limit: NEWER_PAGE, ...listSort,
     })}`);
     prependItems(page.items);
     newer.hidden = !page.items.length;
@@ -164,6 +175,9 @@ function markActive(scroll) {
   if (scroll) revealActive(true);
   els.prev.disabled = !neighbor(-1);
   els.next.disabled = !neighbor(1);
+  // The same in the player's controls
+  $('c-prev').disabled = els.prev.disabled;
+  $('c-next').disabled = els.next.disabled;
 }
 
 // On wide screens the playlist scrolls by itself; on phones it is part of the page.
@@ -214,21 +228,83 @@ function updateWatched(v) {
 }
 
 // ---------- Switching videos ----------
+// Tab mode: opened with "Tonton di tab baru" from the grid (&tab=1). There is no list behind it
+// in this tab, so W means "done": mark it watched (never unmark) and close the tab, and the back
+// keys close it too.
+const tabMode = new URLSearchParams(location.search).has('tab');
+
+function closeTab() {
+  if (document.fullscreenElement || document.webkitFullscreenElement) return; // Esc leaves fullscreen first
+  window.close();
+  // Still here: the browser refused (the tab wasn't opened by the grid's button)
+  setTimeout(() => toast.show('Tab ini tidak bisa ditutup otomatis. Tutup dengan Ctrl/Cmd + W.'), 300);
+}
+
+/** W in tab mode: done with this video. */
+async function doneCloseTab() {
+  if (current && !current.item.watched) await setMark(current.item, 'watched', true);
+  closeTab();
+}
+
 function go(v) {
   if (!v || v.name === current?.name) return;
-  history.pushState(null, '', tgWatchUrl(v.item, fav));
+  pushVideo(tgWatchUrl(v.item, fav) + sortSuffix + (tabMode ? '&tab=1' : ''));
   load(v, true);
 }
 
+let preparedNext = null; // the item prepared in the background after the current one's analysis
+
+// ---------- Where the channel's list opens when going back ----------
+// The grid (telegram.js, showFocus) scrolls to the video this page has in focus: the first one in
+// view in the playlist when you scrolled the playlist yourself since the last switch, otherwise
+// the one playing (after "next, next", that is far below where you came from). Kept up to date
+// as it changes, not written on leaving: going back to a cached page shows it before this page's
+// pagehide runs, so it would read the previous value.
+let browsedList = false;
+let focusTimer = 0;
+const queueFocus = () => {
+  clearTimeout(focusTimer);
+  focusTimer = setTimeout(saveFocus, 250);
+};
+for (const type of ['wheel', 'touchmove']) {
+  els.list.addEventListener(type, () => { browsedList = true; }, { passive: true });
+}
+els.list.addEventListener('scroll', () => browsedList && queueFocus(), { passive: true });
+addEventListener('scroll', () => browsedList && queueFocus(), { passive: true }); // phones: the page scrolls
+
+function focusItem() {
+  if (browsedList) {
+    // in screen order: newer videos are inserted on top
+    const edge = listScrolls() ? els.list.getBoundingClientRect().top : $('player').getBoundingClientRect().bottom;
+    const first = [...els.list.querySelectorAll('.item')].find((btn) => btn.getBoundingClientRect().bottom > edge + 8);
+    const item = first && items.find((it) => keyOf(it) === first.dataset.key);
+    if (item) return item;
+  }
+  return current?.item;
+}
+
+function saveFocus() {
+  if (tabMode) return; // a tab of its own: the list is in another tab, left as it is
+  const item = focusItem();
+  if (item) store.set('tg:focus', { c: item.c, m: item.m, fav });
+}
+
 function load(v, play) {
-  if (current && keyOf(current.item) !== keyOf(v.item)) stopDownload(current.item);
+  browsedList = false;
+  // Downloads made for videos this tab is leaving (the one playing, the one prepared as next).
+  for (const item of [current?.item, preparedNext]) {
+    if (item && keyOf(item) !== keyOf(v.item)) stopDownload(item);
+  }
   upnext.hide();
   toast.hide();
   current = v;
   document.title = `${v.title} · Telegram · Video Player`;
   renderNow();
   markActive(true);
-  player.load(v, neighbor(1)); // the next one is prepared once this one's analysis is done
+  const next = neighbor(1); // prepared once this one's analysis is done (if the settings allow)
+  preparedNext = next?.item ?? null;
+  player.load(v, next);
+  saveFocus();
   if (play) autoplay(player, toast);
   pollSave();
 }
@@ -241,7 +317,7 @@ function renderNow() {
     height ? `${height}p` : null,
     fmtTime(video.duration || item.duration),
     item.size ? fmtSize(item.size) : null,
-    item.date ? `diunggah ${fmtAgo(item.date)}` : null,
+    item.date ? `diunggah ${fmtWhen(item.date)}` : null,
   ].filter(Boolean);
   els.title.textContent = item.title;
   els.channel.textContent = ch?.title ?? '';
@@ -299,8 +375,33 @@ function stopDownload(item) {
   }).then((r) => r.body?.cancel(), () => {}); // unread, it would hold one of the browser's connections
 }
 window.addEventListener('pagehide', () => {
-  if (current) stopDownload(current.item);
+  for (const item of [current?.item, preparedNext]) if (item) stopDownload(item);
 });
+// ✕ in the player: this video's analysis was dropped, so is its download.
+video.addEventListener('analysisskip', (e) => {
+  if (e.detail?.item) stopDownload(e.detail.item);
+});
+
+// ---------- Stream settings (per device; see tgSettings in seekbar.js) ----------
+const settings = { analysis: $('set-analysis'), prefetch: $('set-prefetch'), fast: $('set-fast') };
+
+function renderSettings() {
+  settings.analysis.checked = tgSettings.analysis();
+  settings.prefetch.checked = tgSettings.prefetch();
+  settings.prefetch.disabled = !settings.analysis.checked; // it prepares the next video's analysis
+}
+
+function saveSettings(values) {
+  for (const [key, on] of Object.entries(values)) store.set(`tg:${key}`, on);
+  renderSettings();
+  player.settingsChanged();
+  toast.show(tgSettings.analysis() || tgSettings.prefetch() ? 'Pengaturan stream disimpan' : 'Mode cepat: tanpa peta suara dan tanpa menyiapkan video berikutnya');
+}
+
+settings.analysis.addEventListener('change', () => saveSettings({ analysis: settings.analysis.checked }));
+settings.prefetch.addEventListener('change', () => saveSettings({ prefetch: settings.prefetch.checked }));
+settings.fast.addEventListener('click', () => saveSettings({ analysis: false, prefetch: false }));
+renderSettings();
 
 // ---------- Suka & Ditonton (stored by the tg module, so every device sees them) ----------
 const MARKS = {
@@ -442,6 +543,8 @@ els.saveStatus.addEventListener('click', async (e) => {
 
 // ---------- Controls ----------
 els.prev.addEventListener('click', () => go(neighbor(-1)));
+$('c-prev').addEventListener('click', () => go(neighbor(-1)));
+$('c-next').addEventListener('click', () => go(neighbor(1)));
 els.watched.addEventListener('click', toggleWatched);
 els.like.addEventListener('click', toggleLike);
 els.next.addEventListener('click', () => go(neighbor(1)));
@@ -459,9 +562,18 @@ setupShortcuts(player, {
   t: toggleTheater,
   n: () => go(neighbor(1)),
   p: () => go(neighbor(-1)),
-  w: toggleWatched,
   h: toggleLike,
+  // Back to Favorit or to the video's channel, which reopens where it was scrolled (telegram.js).
+  ...backShortcuts(
+    () => (fav ? '?page=telegram&fav=1' : `?page=telegram&c=${current?.item.c ?? appData.c}${sortSuffix}`),
+    (ref) => ref.get('page') === 'telegram',
+  ),
+  ...(tabMode
+    ? { w: doneCloseTab, Escape: closeTab, q: closeTab, Backspace: closeTab }
+    : { w: toggleWatched }),
 });
+
+if (tabMode) toast.show('Tab baru: tekan W kalau sudah selesai (ditandai ditonton, lalu tab ditutup)');
 
 // ---------- Init ----------
 (async () => {

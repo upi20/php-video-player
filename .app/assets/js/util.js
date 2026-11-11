@@ -62,6 +62,11 @@ export function fmtAgo(unix) {
   return rtf.format(Math.round(diff / size), unit);
 }
 
+const dateFmt = new Intl.DateTimeFormat('id', { day: 'numeric', month: 'short', year: 'numeric' });
+
+/** "7 hari yang lalu - 29 Okt 2026": how long ago, then the date itself. */
+export const fmtWhen = (unix) => `${fmtAgo(unix)} - ${dateFmt.format(unix * 1000)}`;
+
 export function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }

@@ -44,6 +44,7 @@ $data = ['videos' => $videos, 'current' => $current['name']];
         <li><kbd>M</kbd> bisu</li>
         <li><kbd>N</kbd><kbd>P</kbd> berikutnya/sebelumnya</li>
         <li><kbd>/</kbd> cari</li>
+        <li><kbd>Esc</kbd><kbd>Q</kbd><kbd>⌫</kbd> kembali</li>
       </ul>
     </div>
   </section>

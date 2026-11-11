@@ -134,6 +134,7 @@
 .tg-pin[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .tg-pin[aria-pressed="true"] svg { fill: currentColor; }
 .tg-search { flex: 1 1 160px; }
+.tg-sort { flex: 0 1 auto; }
 .tg-count { color: var(--faint); font-size: 12px; white-space: nowrap; }
 
 /* Page box: "Hal. [12] / 95" — the page follows scrolling and can be typed to jump */
@@ -222,6 +223,61 @@
 .chip.dup-chip { background: rgba(255, 176, 32, 0.16); color: var(--loud); }
 a.chip.dup-chip:hover { text-decoration: underline; }
 
+/* Stream settings on the watch page: a small panel under the button */
+.tg-settings { position: relative; }
+.tg-settings > summary { list-style: none; }
+.tg-settings > summary::-webkit-details-marker { display: none; }
+.tg-settings[open] > summary { border-color: var(--accent); color: var(--accent); }
+.tg-settings-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.tg-settings-title { margin: 0; font-weight: 700; }
+.tg-settings-note { margin: -2px 0 4px 46px; color: var(--faint); font-size: 12px; line-height: 1.4; }
+.tg-settings .switch:has(input:disabled) { opacity: .45; }
+
+/* Analysis buttons in the player's status (✕ skip, Analisis) */
+.c-status-btn {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.c-status-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.c-status.actionable .label { display: inline; }
+
+/* Peek: a video in a modal over the grid */
+.peek {
+  width: min(960px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  overflow: hidden;
+}
+.peek::backdrop { background: rgba(0, 0, 0, 0.75); }
+.peek video { display: block; width: 100%; max-height: calc(100vh - 110px); background: #000; }
+.peek-bar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.peek-info { flex: 1; min-width: 0; }
+.peek-title { margin: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.peek-meta { margin: 2px 0 0; color: var(--faint); font-size: 12px; }
+
 /* Favorit */
 .tg-liked {
   position: absolute;
@@ -243,7 +299,9 @@ a.chip.dup-chip:hover { text-decoration: underline; }
    card is as wide as its thumbnail, so the thumbnail is 9/16 of the card's width tall. */
 #tg-grid .card-wrap { container-type: inline-size; }
 #tg-grid .tg-liked { display: none; }
-.tg-card-like {
+.tg-card-like,
+.tg-card-tab,
+.tg-card-peek {
   position: absolute;
   top: calc(100cqw * 9 / 16 - 44px);
   left: 8px;
@@ -259,7 +317,13 @@ a.chip.dup-chip:hover { text-decoration: underline; }
   backdrop-filter: blur(6px);
   transition: opacity .15s, transform .15s;
 }
-.tg-card-like svg { width: 18px; height: 18px; }
+.tg-card-tab { left: 50px; } /* next to the ❤ */
+.tg-card-peek { left: 92px; }
+.tg-card-like svg,
+.tg-card-tab svg,
+.tg-card-peek svg { width: 18px; height: 18px; }
+.tg-card-tab:active { transform: scale(.88); }
+.tg-card-tab:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
 .tg-card-like[aria-pressed="true"] { color: #ff4d6d; }
 .tg-card-like[aria-pressed="true"] svg { fill: currentColor; }
 .tg-card-like:active { transform: scale(.88); }
@@ -268,8 +332,12 @@ a.chip.dup-chip:hover { text-decoration: underline; }
 /* Touch: always there. Mouse: liked ones stay visible, the rest show on hover. */
 @media (hover: hover) {
   .tg-card-like[aria-pressed="false"] { opacity: 0; }
-  .card-wrap:hover .tg-card-like { opacity: 1; }
-  .tg-card-like:hover { transform: scale(1.08); }
+  .tg-card-tab, .tg-card-peek { opacity: 0; }
+  .card-wrap:hover .tg-card-like,
+  .card-wrap:hover .tg-card-tab,
+  .card-wrap:hover .tg-card-peek { opacity: 1; }
+  .tg-card-like:hover,
+  .tg-card-tab:hover { transform: scale(1.08); }
 }
 
 .chip-btn.tg-fav-chip { flex: none; }

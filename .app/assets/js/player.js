@@ -239,6 +239,8 @@ export function createPlayer() {
       seekbar.load(v, next);
     },
     rotate,
+    /** The Telegram stream settings changed (tgSettings in seekbar.js): apply them to this video. */
+    settingsChanged: () => seekbar.settingsChanged(),
     autoplay,
     togglePlay,
     seekBy,

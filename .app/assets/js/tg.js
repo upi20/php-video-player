@@ -1,5 +1,5 @@
 // Talking to the Telegram module (the "tg" container, which Apache proxies under /tg/).
-import { escapeHtml, fmtAgo, fmtSize, fmtTime, WATCHED_BADGE, watchedPercent } from './util.js';
+import { escapeHtml, fmtWhen, fmtSize, fmtTime, store, WATCHED_BADGE, watchedPercent } from './util.js';
 
 // Telegram's error codes (from MTProto), in plain language.
 const ERRORS = {
@@ -81,7 +81,9 @@ export function autoLoadMore(button, load, scroller = null) {
 export const tgThumbUrl = (item) => (item.thumb
   ? `tg/thumb/${item.c}/${item.m}`
   : `?api=thumb&tg=${item.c}_${item.m}&k=${item.size ?? 0}`);
-export const tgStreamUrl = (item) => `tg/stream/${item.c}/${item.m}`;
+// With analysis off (the fast mode, see tgSettings in seekbar.js), a small video isn't downloaded
+// whole before playing either: that download is only worth it to analyse it.
+export const tgStreamUrl = (item) => `tg/stream/${item.c}/${item.m}${store.get('tg:analysis', true) ? '' : '?whole=0'}`;
 /** fav: play through Favorit (across channels) instead of the video's channel. */
 export const tgWatchUrl = (item, fav = false) => `?page=tg-watch&c=${item.c}&m=${item.m}${fav ? '&list=fav' : ''}`;
 
@@ -159,7 +161,7 @@ export const HEART_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 
 /** The meta line of a card (HTML): a "Duplikat" tag first when an older post has the same video. */
 export function tgMeta(item) {
-  const text = [item.height ? `${item.height}p` : null, item.size ? fmtSize(item.size) : null, item.date ? fmtAgo(item.date) : null]
+  const text = [item.height ? `${item.height}p` : null, item.size ? fmtSize(item.size) : null, item.date ? fmtWhen(item.date) : null]
     .filter(Boolean).join(' · ');
   return item.dupOf ? `<span class="dup-tag" title="Video yang sama sudah diunggah sebelumnya (#${item.dupOf})">Duplikat</span> ${text}` : text;
 }

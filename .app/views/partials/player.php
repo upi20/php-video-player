@@ -21,6 +21,13 @@
         <input type="range" id="c-volume" min="0" max="1" step="0.05" aria-label="Volume">
       </div>
       <span class="c-time" id="c-time">0:00 / 0:00</span>
+      <!-- Enabled by the page once its playlist knows the neighbours (no request of their own) -->
+      <button class="cbtn c-skip" id="c-prev" title="Video sebelumnya (P)" aria-label="Video sebelumnya" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>
+      </button>
+      <button class="cbtn c-skip" id="c-next" title="Video berikutnya (N)" aria-label="Video berikutnya" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
+      </button>
       <span class="c-spacer"></span>
       <span class="c-status" id="c-status"></span>
       <button class="cbtn c-speed" id="c-speed" title="Kecepatan putar">1×</button>

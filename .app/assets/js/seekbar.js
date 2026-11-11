@@ -1,10 +1,18 @@
 // The seek bar: a loudness map drawn on a canvas (loud parts highlighted), click/drag to seek,
 // and a hover preview frame from the server's storyboard sprite sheets.
-import { $, clock, loudnessUrl, storyboardUrl } from './util.js';
+import { $, clock, loudnessUrl, store, storyboardUrl } from './util.js';
 
 const LOUD = 0.8; // top share of this video's loudness range that is marked as loud
-const BUFFER_BEFORE_ANALYSIS_S = 30; // see waitForBuffer()
-const DEFER_ANALYSIS_S = 20;
+const DEFER_ANALYSIS_S = 30; // seconds of watching before a big Telegram video is analysed
+
+// Telegram stream settings (per device, set on the watch page). Analysing a Telegram video means
+// downloading it whole, for the loudness map and the previews alike, so it is one switch; the
+// other one prepares (downloads) the next video in the background. Both off = the fast mode.
+// Local videos are on disk: they are always analysed and prepared.
+export const tgSettings = {
+  analysis: () => store.get('tg:analysis', true),
+  prefetch: () => store.get('tg:prefetch', true),
+};
 const BAR_W = 3;
 const BAR_GAP = 1;
 const MIN_BAR_H = 3;
@@ -111,17 +119,32 @@ export function createSeekbar(video) {
     }
   }
 
-  function setStatus(kind) {
+  const SKIP_BTN = '<button class="c-status-btn" data-analysis="skip" title="Lewati analisis video ini (hemat koneksi)" aria-label="Lewati analisis">✕</button>';
+  const NOW_BTN = '<button class="c-status-btn" data-analysis="now" title="Buat peta suara dan pratinjau untuk video ini">Analisis</button>';
+
+  /** n: seconds left while waiting. The ✕ only where analysing costs a download of its own. */
+  function setStatus(kind, n = 0) {
+    phase = kind;
+    const skip = current?.item ? SKIP_BTN : '';
     ui.status.classList.toggle('busy', kind === 'busy');
+    ui.status.classList.toggle('actionable', ['waiting', 'busy', 'manual', 'skipped'].includes(kind));
     ui.status.innerHTML = {
-      busy: '<span class="label">Menganalisis suara…</span>',
-      waiting: '<span class="label">Analisis suara dimulai sebentar lagi…</span>',
+      busy: `<span class="label">Menganalisis suara…</span>${skip}`,
+      waiting: `<span class="label">Peta suara dalam ${n} dtk</span>${skip}`,
+      manual: `<span class="label">Peta suara mati</span>${NOW_BTN}`,
+      skipped: `<span class="label">Analisis dilewati</span>${NOW_BTN}`,
       ready: '<span class="dot"></span><span class="label">Suara keras</span>',
       none: '<span class="label">Tanpa audio</span>',
       error: '<span class="label">Analisis suara gagal</span>',
       remote: '<span class="label">Video terlalu besar untuk peta suara · simpan ke vid dulu</span>',
     }[kind];
   }
+
+  ui.status.addEventListener('click', (e) => {
+    const action = e.target.closest('[data-analysis]')?.dataset.analysis;
+    if (action === 'skip') skip();
+    else if (action === 'now' && current) analyse(current, currentNext);
+  });
 
   // ----- Storyboard (hover preview frames) -----
   function showFrame(t) {
@@ -140,87 +163,122 @@ export function createSeekbar(video) {
   }
 
   // ----- Loading -----
+  // ----- Analysis: loudness map + hover previews -----
+  // run changes whenever the analysis of the video on screen is started over or dropped (another
+  // video, ✕), so answers that arrive late are ignored.
+  let run = 0;
+  let phase = null;
+  let currentNext = null;
+  let countdown = null; // stops the countdown of a deferred analysis
+
   /** Shows video v's loudness map and previews; then prepares `next` in the background. */
   function load(v, next) {
+    run++;
+    countdown?.();
     aborter.abort();
     aborter = new AbortController();
     current = v;
+    currentNext = next;
     wave.norm = null;
     board.video = v;
     board.meta = null;
+    draw();
     if (v.remote) {
       // A big Telegram video: no loudness map or previews until it is saved locally.
       setStatus('remote');
-      draw();
       return;
     }
-    draw();
-    if (!v.deferAnalysis) {
-      analyse(v, next);
+    if (!v.item) {
+      analyse(v, next); // a local file: nothing to download
       return;
     }
-    // A big Telegram video streams straight from Telegram, and analysing it means downloading it
-    // whole: doing both from the start slows the stream down. Unless it was analysed before (then
-    // it's instant), let playback get ahead first.
-    setStatus('waiting');
+    // Telegram: analysing means downloading the whole video. Already done before? Then it's free.
+    const id = run;
+    setStatus('waiting', DEFER_ANALYSIS_S);
     fetch(`${loudnessUrl(v)}&cached=1`).then((r) => {
       r.body?.cancel(); // unread, the response would keep one of the browser's few connections busy
       return r.ok;
     }, () => false).then((cached) => {
-      if (current !== v) return;
+      if (id !== run) return;
       if (cached) analyse(v, next);
-      else waitForBuffer(v, () => analyse(v, next));
+      else autoAnalyse(v, next);
     });
   }
 
+  /** Follows the setting: no analysis, at once (a small video shares its download), or later. */
+  function autoAnalyse(v, next) {
+    if (!tgSettings.analysis()) setStatus('manual');
+    else if (v.deferAnalysis) startCountdown(v, next);
+    else analyse(v, next);
+  }
+
   /**
-   * Calls done() once playback has a head start: DEFER_ANALYSIS_S seconds after the video first
-   * plays (wall clock: pausing or seeking doesn't reset it), or sooner when
-   * BUFFER_BEFORE_ANALYSIS_S seconds after the playhead are buffered (or the buffer reaches the
-   * end). Nothing happens if another video is loaded meanwhile.
+   * A big Telegram video streams straight from Telegram, and analysing it downloads it whole.
+   * Doing that from the start slows the stream, and is wasted when the next video comes a few
+   * seconds later: so it waits for DEFER_ANALYSIS_S seconds of actual watching (paused or
+   * still loading doesn't count), shown as a countdown with a ✕ to skip it.
    */
-  function waitForBuffer(v, done) {
-    const events = ['progress', 'timeupdate', 'playing', 'ended'];
-    let timer = null;
-    const finish = () => {
+  function startCountdown(v, next) {
+    const id = run;
+    let left = DEFER_ANALYSIS_S;
+    const timer = setInterval(() => {
+      if (id !== run) return stop();
+      if (!video.paused && video.readyState >= 3) left--;
+      if (left > 0) {
+        setStatus('waiting', left);
+        return;
+      }
       stop();
-      if (current === v) done();
-    };
-    const check = (e) => {
-      if (current !== v) return stop();
-      // From when it really plays: not paused, but still waiting for data, doesn't count.
-      if (!timer && (e?.type === 'playing' || (!video.paused && video.readyState >= 3))) {
-        timer = setTimeout(finish, DEFER_ANALYSIS_S * 1000);
-      }
-      if (!video.duration) return;
-      const t = video.currentTime;
-      let ahead = 0;
-      for (let i = 0; i < video.buffered.length; i++) {
-        if (video.buffered.start(i) <= t + 0.5 && video.buffered.end(i) >= t) ahead = video.buffered.end(i) - t;
-      }
-      if (video.ended || ahead >= Math.min(BUFFER_BEFORE_ANALYSIS_S, video.duration - t - 0.5)) finish();
-    };
+      analyse(v, next);
+    }, 1000);
     const stop = () => {
-      clearTimeout(timer);
-      events.forEach((e) => video.removeEventListener(e, check));
+      clearInterval(timer);
+      if (countdown === stop) countdown = null;
     };
-    events.forEach((e) => video.addEventListener(e, check));
-    check();
+    countdown = stop;
+    setStatus('waiting', left);
+  }
+
+  /** ✕: drop this video's analysis; the page also stops its download (the analysisskip event). */
+  function skip() {
+    if (!current) return;
+    run++;
+    countdown?.();
+    aborter.abort();
+    aborter = new AbortController();
+    setStatus('skipped');
+    video.dispatchEvent(new CustomEvent('analysisskip', { detail: current }));
+  }
+
+  /** The settings changed: apply them to the video on screen. */
+  function settingsChanged() {
+    const v = current;
+    if (!v?.item || v.remote) return;
+    const on = tgSettings.analysis();
+    if (!on && (phase === 'waiting' || phase === 'busy')) {
+      skip();
+      setStatus('manual');
+    } else if (on && (phase === 'manual' || phase === 'skipped')) {
+      autoAnalyse(v, currentNext);
+    }
   }
 
   function analyse(v, next) {
+    run++;
+    countdown?.();
+    const id = run;
     setStatus('busy');
     const loudness = getJson(loudnessUrl(v)).then((data) => {
-      if (current !== v) return;
+      if (id !== run) return;
       setLoudness(data);
       setStatus(wave.norm ? 'ready' : 'none');
       draw();
     }, () => {
-      if (current === v) setStatus('error');
+      if (id === run) setStatus('error');
     });
 
     const storyboard = getJson(storyboardUrl(v)).then((meta) => {
-      if (current !== v) return;
+      if (id !== run) return;
       board.meta = meta;
       // Download every sheet now so the first hover is already instant.
       for (let i = 1; i <= meta.sheets; i++) new Image().src = storyboardUrl(v, i);
@@ -232,7 +290,7 @@ export function createSeekbar(video) {
   function prefetch(v) {
     // A big Telegram video would be downloaded whole in the background: only small ones, which the
     // tg module then plays from that same download (toVideo() in tg.js).
-    if (v.remote || v.prefetch === false) return;
+    if (v.remote || v.prefetch === false || (v.item && !tgSettings.prefetch())) return;
     getJson(loudnessUrl(v)).catch(() => {});
     getJson(storyboardUrl(v)).catch(() => {});
   }
@@ -293,5 +351,5 @@ export function createSeekbar(video) {
 
   new ResizeObserver(() => draw()).observe(ui.seek);
 
-  return { load, prefetch, draw, isDragging: () => dragging };
+  return { load, prefetch, draw, settingsChanged, isDragging: () => dragging };
 }

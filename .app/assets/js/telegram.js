@@ -3,6 +3,7 @@
 import { $, confirmDialog, escapeHtml, matchesSearch, notice, searchWords, store } from './util.js';
 import { HEART_ICON, tgApi, tgMeta, tgThumbHtml, tgTitleHtml, tgWatchUrl } from './tg.js';
 import { createVirtualGrid } from './vgrid.js';
+import { onPlayedEnough } from './stage.js';
 
 const panels = { message: $('tg-message'), login: $('tg-login'), browser: $('tg-browser') };
 const login = {
@@ -11,7 +12,7 @@ const login = {
 };
 const browser = {
   toolbar: $('tg-toolbar'), pins: $('tg-pins'), channel: $('tg-channel'), pin: $('tg-pin'), pinLabel: $('tg-pin-label'),
-  search: $('tg-search'), pager: $('tg-pager'), pageInput: $('tg-page'), pages: $('tg-pages'), count: $('tg-count'),
+  search: $('tg-search'), sort: $('tg-sort'), pager: $('tg-pager'), pageInput: $('tg-page'), pages: $('tg-pages'), count: $('tg-count'),
   account: $('tg-account'), logout: $('tg-logout'), grid: $('tg-grid'), empty: $('tg-empty'),
   summary: $('tg-summary'), summaryText: $('tg-summary-text'),
 };
@@ -98,6 +99,7 @@ const RETRY_MS = 5000;      // a page that failed to load is tried again after t
 
 const state = {
   channels: [], channel: null, fav: false, query: '', total: 0,
+  sort: 'new', seed: 0, // the list's order (?s=), from the tg module's index; "new" is Telegram's own
   items: [],          // index → video, false when unplayable, undefined while not loaded
   pages: new Map(),   // page → 'loading' | 'done' | time of the failure
   request: 0,         // bumped on every channel/search change, to drop older answers
@@ -117,7 +119,7 @@ function cardHtml(index) {
       <div class="card-body"><h3 class="card-title">Video tidak bisa diputar</h3><p class="card-meta">&nbsp;</p></div></div>`;
   }
   const meta = state.fav && item.channel?.title ? `${escapeHtml(item.channel.title)} · ${tgMeta(item)}` : tgMeta(item);
-  return `<a class="card" href="${tgWatchUrl(item, state.fav)}" title="${tgTitleHtml(item)}">
+  return `<a class="card" href="${tgWatchUrl(item, state.fav)}${watchSortSuffix()}" title="${tgTitleHtml(item)}">
       <div class="thumb">${tgThumbHtml(item)}</div>
       <div class="card-body">
         <h3 class="card-title">${tgTitleHtml(item)}</h3>
@@ -125,13 +127,140 @@ function cardHtml(index) {
       </div>
     </a>
     <button class="tg-card-like" aria-pressed="${Boolean(item.liked)}" title="${item.liked ? 'Hapus dari Favorit' : 'Suka: masukkan ke Favorit'}"
-      aria-label="${item.liked ? 'Hapus dari Favorit' : 'Suka'}">${HEART_ICON}</button>`;
+      aria-label="${item.liked ? 'Hapus dari Favorit' : 'Suka'}">${HEART_ICON}</button>
+    <button class="tg-card-peek" title="Intip di sini (N/P: video lain, W: selesai, Esc: tutup)" aria-label="Intip">${PEEK_ICON}</button>
+    <button class="tg-card-tab" title="Tonton di tab baru (W di sana: selesai & tutup tab)" aria-label="Tonton di tab baru">${NEW_TAB_ICON}</button>`;
 }
+
+const PEEK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const NEW_TAB_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
 
 const grid = createVirtualGrid(browser.grid, {
   renderItem: cardHtml,
   onRange: onRange,
   inset: () => browser.toolbar.getBoundingClientRect().bottom,
+});
+
+// Open a card's video in a new tab, in tab mode (&tab=1): there, W (or Esc, Q, Backspace) closes
+// it again. Opened by script, as browsers only let a page close a tab that a script opened.
+browser.grid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.tg-card-tab');
+  if (!btn) return;
+  e.preventDefault();
+  const item = state.items[Number(btn.closest('.card-wrap').dataset.index)];
+  if (item) window.open(`${tgWatchUrl(item, state.fav)}${watchSortSuffix()}&tab=1`, '_blank');
+});
+
+// ---------- Peek: a quick look in a modal, without leaving the grid ----------
+// The browser's own <video>, streamed directly (no whole download, no analysis): cheap on the
+// connection. Closing it stops the stream.
+const peek = {
+  dialog: $('peek'), video: $('peek-video'), title: $('peek-title'), meta: $('peek-meta'), open: $('peek-open'),
+  save: $('peek-save'), index: -1,
+};
+
+function openPeek(index) {
+  const item = state.items[index];
+  if (!item) return;
+  peek.index = index;
+  peek.title.textContent = item.title;
+  peek.meta.innerHTML = tgMeta(item);
+  peek.open.href = tgWatchUrl(item, state.fav) + watchSortSuffix();
+  peek.video.src = `tg/stream/${item.c}/${item.m}?whole=0`;
+  if (!peek.dialog.open) peek.dialog.showModal();
+  peek.video.play().catch(() => {});
+  renderPeekSave();
+  pollPeekSave();
+}
+
+// Simpan: queued in the tg module, which downloads in the background (it goes on after the modal
+// is closed). While the modal shows that video, its progress is shown on the button.
+const SAVE_LABELS = { queued: 'Antre…', done: 'Tersimpan', failed: 'Coba lagi' };
+let peekSaveTimer = 0;
+
+function renderPeekSave() {
+  const s = state.items[peek.index]?.save ?? { state: 'idle' };
+  peek.save.disabled = ['queued', 'running', 'done'].includes(s.state);
+  peek.save.querySelector('.label').textContent = s.state === 'running'
+    ? `Menyimpan ${Math.round(s.percent ?? 0)}%`
+    : SAVE_LABELS[s.state] ?? 'Simpan';
+}
+
+function pollPeekSave() {
+  clearTimeout(peekSaveTimer);
+  const index = peek.index;
+  const item = state.items[index];
+  if (!peek.dialog.open || !['queued', 'running'].includes(item?.save?.state)) return;
+  peekSaveTimer = setTimeout(async () => {
+    const all = await tgApi('saves').catch(() => null);
+    if (all) item.save = all[`${item.c}:${item.m}`] ?? item.save;
+    if (item.save.state === 'done') grid.refresh(index, index + 1); // the card's "Tersimpan" badge
+    if (peek.index === index) renderPeekSave();
+    pollPeekSave();
+  }, 1000);
+}
+
+peek.save.addEventListener('click', async () => {
+  const index = peek.index;
+  const item = state.items[index];
+  if (!item) return;
+  peek.save.disabled = true;
+  try {
+    item.save = await tgApi('save', { c: item.c, m: item.m });
+  } catch (err) {
+    notice(err.message, true);
+  }
+  if (peek.index === index) renderPeekSave();
+  pollPeekSave();
+});
+
+/** Next/previous card in the grid's order (step = 1 / -1), loading its page when needed. */
+async function stepPeek(step) {
+  const i = peek.index + step;
+  if (i < 0 || i >= state.total) return;
+  if (state.items[i] === undefined) await loadPage(Math.floor(i / PAGE));
+  if (state.items[i]) openPeek(i);
+  else peek.index = i; // not playable: skipped on the next press
+  grid.scrollToIndex(i);
+}
+
+async function markPeekWatched() {
+  const item = state.items[peek.index];
+  if (!item || item.watched) return;
+  item.watched = Math.floor(Date.now() / 1000);
+  grid.refresh(peek.index, peek.index + 1);
+  await tgApi('watched', { c: item.c, m: item.m, on: 1 }).catch(() => {});
+}
+
+browser.grid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.tg-card-peek');
+  if (!btn) return;
+  e.preventDefault();
+  openPeek(Number(btn.closest('.card-wrap').dataset.index));
+});
+$('peek-close').addEventListener('click', () => peek.dialog.close());
+peek.dialog.addEventListener('click', (e) => { if (e.target === peek.dialog) peek.dialog.close(); }); // the backdrop
+peek.dialog.addEventListener('close', () => {
+  clearTimeout(peekSaveTimer); // only the display stops: the download goes on
+  peek.video.pause();
+  peek.video.removeAttribute('src');
+  peek.video.load(); // drops the connection
+});
+onPlayedEnough(peek.video, { current: () => (peek.dialog.open ? peek : null), onWatched: markPeekWatched });
+peek.dialog.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const actions = {
+    q: () => peek.dialog.close(),
+    Backspace: () => peek.dialog.close(),
+    n: () => stepPeek(1),
+    p: () => stepPeek(-1),
+    w: () => markPeekWatched().then(() => peek.dialog.close()),
+    Enter: () => location.assign(peek.open.href),
+  };
+  const action = actions[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+  if (!action) return;
+  e.preventDefault();
+  action();
 });
 
 // ❤ on a card: like/unlike without opening the video (in Favorit the card stays until reload).
@@ -187,6 +316,7 @@ function setCount(text) {
 function renderSummary() {
   const name = state.fav ? '❤ Favorit' : (state.channels.find((ch) => ch.id === state.channel)?.title ?? 'Telegram');
   const parts = [name];
+  if (sorted()) parts.push(browser.sort.selectedOptions[0]?.textContent ?? '');
   if (state.query) parts.push(`“${state.query}”`);
   if (browser.count.textContent) parts.push(browser.count.textContent);
   if (state.total > PAGE) parts.push(`Hal. ${state.page + 1}/${pageCount()}`);
@@ -220,6 +350,9 @@ function setPage(p, index) {
   }
   if (state.query) url.searchParams.set('q', state.query);
   else url.searchParams.delete('q');
+  url.searchParams.delete('s');
+  url.searchParams.delete('seed');
+  for (const [key, value] of Object.entries(sortQuery('s'))) url.searchParams.set(key, value);
   if (p > 0) url.searchParams.set('p', String(p + 1));
   else url.searchParams.delete('p');
   state.page = p;
@@ -234,7 +367,7 @@ async function loadPage(p) {
   const request = state.request;
   state.pages.set(p, 'loading');
   try {
-    const params = new URLSearchParams({ c: state.channel, q: state.query, index: p * PAGE, limit: PAGE });
+    const params = new URLSearchParams({ c: state.channel, q: state.query, index: p * PAGE, limit: PAGE, ...sortQuery() });
     const res = await tgApi(`videos?${params}`);
     if (request !== state.request) return;
     res.items.forEach((item, k) => { state.items[p * PAGE + k] = item ?? false; });
@@ -294,7 +427,7 @@ async function openList(index = 0) {
   scrollTo({ top: 0, behavior: 'instant' });
   browser.empty.hidden = true;
   // The first search in a channel fetches its whole video list on the server (see search() in server.php).
-  setCount(state.query && !state.fav ? 'Mencari… (pertama kali di channel ini bisa ±30 detik)' : 'Memuat video…');
+  setCount((state.query || sorted()) && !state.fav ? 'Memuat… (pertama kali di channel ini bisa ±30 detik)' : 'Memuat video…');
   const p = Math.floor(index / PAGE);
   await (state.fav ? loadFavorites() : loadPage(p));
   if (!state.total) return;
@@ -338,13 +471,16 @@ async function showBrowser(me) {
   const remembered = store.get('tg:channel', null);
   state.channel = known(fromUrl) ? fromUrl : known(remembered) ? remembered : state.channels[0].id;
   state.fav = params.get('fav') === '1';
+  restoreSort(params);
   state.query = params.get('q') ?? '';
   browser.search.value = state.query;
   browser.channel.value = String(state.channel);
   renderPins();
   const page = Math.max(1, Number(params.get('p')) || 1) - 1;
   const exact = history.state?.index;
-  openList(Number.isInteger(exact) && Math.floor(exact / PAGE) === page ? exact : page * PAGE);
+  if (Number.isInteger(exact) && Math.floor(exact / PAGE) === page) openList(exact); // back, reload
+  else if (params.has('p')) openList(page * PAGE); // a link to a page
+  else openList(rememberedScroll()).then(showFocus); // just the channel: where you were in it
 }
 
 function showEmpty(text) {
@@ -364,6 +500,8 @@ function renderPins() {
   browser.channel.value = state.fav ? '' : String(state.channel);
   browser.search.placeholder = state.fav ? 'Cari di Favorit…' : 'Cari di channel ini…';
   browser.pin.hidden = state.fav; // the star pins a channel; Favorit is always there
+  browser.sort.hidden = state.fav; // Favorit keeps the order you liked them in
+  browser.sort.value = state.sort;
   const current = state.channels.find((ch) => ch.id === state.channel);
   browser.pin.setAttribute('aria-pressed', String(Boolean(current?.pinned)));
   browser.pinLabel.textContent = current?.pinned ? 'Disematkan' : 'Sematkan';
@@ -371,15 +509,60 @@ function renderPins() {
   renderSummary();
 }
 
+// Each channel (and Favorit) remembers the video at the top of the screen, on this device:
+// switching away and back lands where you were, not at the newest again. Not for search results.
+const scrollKey = () => `tg:scroll:${state.fav ? 'fav' : state.channel}${sorted() ? `:${state.sort}` : ''}`;
+
+function rememberScroll() {
+  if (!state.query && state.total) store.set(scrollKey(), grid.firstVisible());
+}
+
+const rememberedScroll = () => (state.query ? 0 : store.get(scrollKey(), 0));
+
+addEventListener('pagehide', rememberScroll);
+
 function selectChannel(id) {
   setFiltersOpen(false);
+  rememberScroll();
   state.fav = false;
   state.channel = id;
+  restoreSort(null);
   store.set('tg:channel', id);
   browser.channel.value = String(id);
   renderPins();
-  openList(0);
+  openList(rememberedScroll());
 }
+
+// ---------- Order of the list (per channel, on this device; also in the URL as ?s=) ----------
+const sorted = () => !state.fav && state.sort !== 'new';
+
+/** The order as query parameters (sort/seed for the tg module, s/seed in page URLs), or none. */
+function sortQuery(name = 'sort') {
+  if (!sorted()) return {};
+  return state.sort === 'random' ? { [name]: state.sort, seed: state.seed } : { [name]: state.sort };
+}
+
+/** For links to a watch page: its playlist and "next" follow this order. */
+const watchSortSuffix = () => Object.entries(sortQuery('s')).map(([k, v]) => `&${k}=${v}`).join('');
+
+/** From the URL when it says (reload, back, a link), else this channel's last choice. */
+function restoreSort(params) {
+  const saved = store.get(`tg:sort:${state.channel}`, { sort: 'new', seed: 0 });
+  state.sort = params?.get('s') ?? saved.sort;
+  state.seed = Number(params?.get('seed') ?? saved.seed) || 0;
+  if (!browser.sort.querySelector(`option[value="${state.sort}"]`)) state.sort = 'new';
+  browser.sort.value = state.sort;
+}
+
+browser.sort.addEventListener('change', () => {
+  rememberScroll();
+  state.sort = browser.sort.value;
+  if (state.sort === 'random') state.seed = Math.floor(Math.random() * 1e9); // a new shuffle each time it's picked
+  store.set(`tg:sort:${state.channel}`, { sort: state.sort, seed: state.seed });
+  browser.sort.blur();
+  setFiltersOpen(false);
+  openList(rememberedScroll());
+});
 
 browser.channel.addEventListener('change', () => {
   browser.channel.blur(); // the focus would keep the filters open
@@ -390,9 +573,10 @@ browser.pins.addEventListener('click', (e) => {
   if (e.target.closest('[data-fav]')) {
     setFiltersOpen(false);
     if (state.fav) return;
+    rememberScroll();
     state.fav = true;
     renderPins();
-    openList(0);
+    openList(rememberedScroll());
     return;
   }
   const chip = e.target.closest('[data-c]');
@@ -415,22 +599,43 @@ browser.pin.addEventListener('click', async () => {
 
 // Coming back from a video can restore this page from the back/forward cache, with the cards as
 // they were: fetch the pages again so newly watched videos get their badge.
-addEventListener('pageshow', (e) => {
+addEventListener('pageshow', async (e) => {
   if (!e.persisted || !state.total) return;
   if (state.fav) {
-    loadFavorites();
-    return;
+    await loadFavorites();
+  } else {
+    state.pages = new Map();
+    onRange({ start: grid.firstVisible(), end: grid.firstVisible() + 1, first: grid.firstVisible() });
   }
-  state.pages = new Map();
-  onRange({ start: grid.firstVisible(), end: grid.firstVisible() + 1, first: grid.firstVisible() });
+  showFocus();
 });
+
+/**
+ * Back from a watch page: scroll to the video it left in focus (tg-watch.js: the one at the top
+ * of its playlist when that was scrolled, else the one played last), if it is in this list.
+ */
+async function showFocus() {
+  const focus = store.get('tg:focus', null);
+  store.del('tg:focus');
+  if (!focus || state.query || Boolean(focus.fav) !== state.fav || (!state.fav && focus.c !== state.channel)) return;
+  let index = -1;
+  if (state.fav) {
+    index = state.items.findIndex((it) => it && it.c === focus.c && it.m === focus.m);
+  } else {
+    const known = state.items.findIndex((it) => it && it.m === focus.m); // already on a loaded page
+    const query = new URLSearchParams({ c: focus.c, m: focus.m, ...sortQuery() });
+    index = known >= 0 ? known : ((await tgApi(`position?${query}`).catch(() => null))?.index ?? -1);
+  }
+  if (index >= 0 && index < state.total) grid.scrollToIndex(index);
+}
 
 let searchTimer = null;
 browser.search.addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
+    if (!state.query) rememberScroll(); // where you were before searching, for when it's cleared
     state.query = browser.search.value.trim();
-    openList(0);
+    openList(rememberedScroll());
   }, 400);
 });
 
@@ -457,6 +662,19 @@ browser.logout.addEventListener('click', async () => {
   }
 });
 
+// The "broken" page's button: logging out resets a session Telegram has ended (server.php, logout()).
+panels.message.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-reset-session]');
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    render(await tgApi('logout', {}));
+  } catch (err) {
+    btn.disabled = false;
+    notice(err.message, true);
+  }
+});
+
 // ---------- State machine ----------
 function render(status) {
   switch (status.state) {
@@ -472,6 +690,19 @@ function render(status) {
       break;
     case 'ready':
       showBrowser(status.me);
+      break;
+    case 'broken':
+      showMessage(`<h1>Sesi Telegram terputus</h1>
+        <p class="tg-lead">Telegram memutus sesi login ini, biasanya karena sesi yang sama dipakai di dua tempat
+          sekaligus (misalnya backup yang dijalankan di laptop lain). Sesi seperti ini tidak bisa dipakai lagi:
+          reset, lalu login ulang. Favorit, tanda ditonton, dan channel yang disematkan tidak hilang.</p>
+        <p><button class="btn primary" type="button" data-reset-session>Reset sesi &amp; login ulang</button></p>
+        <p class="tg-note">Detail: ${escapeHtml(status.error ?? '')}</p>`);
+      break;
+    case 'restarting':
+      showMessage('<h1>Menyiapkan login ulang…</h1><p class="tg-lead">Modul Telegram dimulai ulang tanpa sesi lama. Tunggu beberapa detik.</p>');
+      // tgApi waits while the module restarts (502/503), then the login form appears
+      setTimeout(() => tgApi('status').then(render, (err) => showMessage(`<h1>Telegram</h1><p class="tg-error">${escapeHtml(err.message)}</p>`)), 3000);
       break;
     default:
       showLogin('phone');

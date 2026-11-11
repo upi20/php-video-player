@@ -33,6 +33,9 @@
 
 * { box-sizing: border-box; }
 
+/* Going from page to page (a video, back to the list) cross-fades instead of flashing blank. */
+@view-transition { navigation: auto; }
+
 html,
 body {
   margin: 0;

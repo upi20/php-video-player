@@ -1,6 +1,6 @@
 // Home page: a YouTube-style grid of every video, with sort chips and live search.
 import {
-  $, appData, deleteWithConfirm, escapeHtml, fmtAgo, fmtSize, highlight, matchesSearch, searchWords,
+  $, appData, deleteWithConfirm, escapeHtml, fmtWhen, fmtSize, highlight, matchesSearch, searchWords,
   sortVideos, store, thumbHtml, TRASH_ICON, watchUrl,
 } from './util.js';
 
@@ -18,7 +18,7 @@ function render() {
   const list = sortVideos(videos, sort).filter((v) => matchesSearch(v, words));
 
   grid.innerHTML = list.map((v) => {
-    const meta = [v.height ? `${v.height}p` : null, fmtSize(v.size), fmtAgo(v.mtime)].filter(Boolean).join(' · ');
+    const meta = [v.height ? `${v.height}p` : null, fmtSize(v.size), fmtWhen(v.mtime)].filter(Boolean).join(' · ');
     return `<li class="card-wrap">
       <a class="card" href="${watchUrl(v)}" title="${escapeHtml(v.title)}">
         <div class="thumb">${thumbHtml(v)}</div>

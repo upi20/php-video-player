@@ -11,7 +11,7 @@ $data = ['c' => $c, 'm' => $m, 'fav' => $fav];
 
     <div class="now">
       <h1 class="now-title" id="title">Memuat…</h1>
-      <a class="tg-channel" id="channel" href="?page=telegram"></a>
+      <a class="tg-channel" id="channel" href="?page=telegram" title="Kembali ke channel (Esc / Q / ⌫)"></a>
       <div class="now-row">
         <div class="chips" id="chips"></div>
         <div class="now-actions">
@@ -33,6 +33,27 @@ $data = ['c' => $c, 'm' => $m, 'fav' => $fav];
           <a class="btn" id="open-tg" target="_blank" rel="noopener noreferrer" title="Buka pesan ini di Telegram" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span class="label">Telegram</span>
           </a>
+          <details class="tg-settings" id="tg-settings">
+            <summary class="btn" title="Pengaturan stream">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span class="label">Stream</span>
+            </summary>
+            <div class="tg-settings-panel">
+              <p class="tg-settings-title">Pengaturan stream</p>
+              <label class="switch">
+                <input type="checkbox" id="set-analysis">
+                <span class="switch-track"></span>
+                Peta suara &amp; pratinjau gambar
+              </label>
+              <p class="tg-settings-note">Mengunduh video utuh (setelah 30 detik ditonton untuk video besar). Kalau mati, video juga langsung di-stream, dan tetap bisa dianalisis per video lewat tombol Analisis di player.</p>
+              <label class="switch">
+                <input type="checkbox" id="set-prefetch">
+                <span class="switch-track"></span>
+                Siapkan video berikutnya
+              </label>
+              <p class="tg-settings-note">Mengunduh video berikutnya (≤ 32 MB) di latar supaya langsung jalan. Butuh peta suara menyala.</p>
+              <button class="btn" type="button" id="set-fast">⚡ Mode cepat: matikan keduanya</button>
+            </div>
+          </details>
           <label class="switch" title="Putar otomatis video berikutnya">
             <input type="checkbox" id="autoplay">
             <span class="switch-track"></span>

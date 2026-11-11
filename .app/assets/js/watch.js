@@ -1,11 +1,14 @@
 // Watch page for local videos: playlist, switching videos without reloading, delete.
 // Toast, up next, resume, theater mode and shortcuts come from stage.js.
 import {
-  $, appData, deleteWithConfirm, escapeHtml, fmtAgo, fmtSize, fmtTime, highlight, matchesSearch, postApi,
+  $, appData, deleteWithConfirm, escapeHtml, fmtWhen, fmtSize, fmtTime, highlight, matchesSearch, postApi,
   posKey, searchWords, seenKey, sortVideos, store, thumbHtml, thumbUrl, WATCHED_BADGE, watchedPercent, watchUrl,
 } from './util.js';
 import { createPlayer } from './player.js';
-import { autoplay, createToast, createUpNext, onPlayedEnough, setupPlayback, setupShortcuts, setupTheater } from './stage.js';
+import {
+  autoplay, backShortcuts, createToast, createUpNext, onPlayedEnough, pushVideo, replaceVideo, setupPlayback,
+  setupShortcuts, setupTheater,
+} from './stage.js';
 
 const { videos } = appData;
 const byName = new Map(videos.map((v) => [v.name, v]));
@@ -40,7 +43,7 @@ function renderList() {
       <div class="thumb">${thumbHtml(v)}${PLAYING_HTML}</div>
       <div>
         <div class="item-title">${highlight(v.title, words)}</div>
-        <div class="item-meta">${fmtSize(v.size)} · ${fmtAgo(v.mtime)}</div>
+        <div class="item-meta">${fmtSize(v.size)} · ${fmtWhen(v.mtime)}</div>
       </div>`;
     btn.addEventListener('click', () => go(v));
     itemEls.set(v.name, btn);
@@ -59,6 +62,9 @@ function markActive(scroll) {
   if (active && scroll) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   els.prev.disabled = !neighbor(-1);
   els.next.disabled = !neighbor(1);
+  // The same in the player's controls
+  $('c-prev').disabled = els.prev.disabled;
+  $('c-next').disabled = els.next.disabled;
 }
 
 /** Updates just the watched bar, so the cover image isn't re-created while playing. */
@@ -89,7 +95,7 @@ function neighbor(step) {
 // ---------- Switching videos ----------
 function go(v) {
   if (!v || v === current) return;
-  history.pushState(null, '', watchUrl(v));
+  pushVideo(watchUrl(v));
   load(v, true);
 }
 
@@ -111,7 +117,7 @@ function renderNow() {
     fmtTime(video.duration || current.duration),
     fmtSize(current.size),
     current.ext.toUpperCase(),
-    `ditambahkan ${fmtAgo(current.mtime)}`,
+    `ditambahkan ${fmtWhen(current.mtime)}`,
   ].filter(Boolean);
   els.title.textContent = current.title;
   els.chips.innerHTML = chips.map((c) => `<span class="chip">${escapeHtml(c)}</span>`).join('');
@@ -182,6 +188,8 @@ video.addEventListener('ended', () => {
 
 // ---------- Controls below the video ----------
 els.prev.addEventListener('click', () => go(neighbor(-1)));
+$('c-prev').addEventListener('click', () => go(neighbor(-1)));
+$('c-next').addEventListener('click', () => go(neighbor(1)));
 els.next.addEventListener('click', () => go(neighbor(1)));
 els.watched.addEventListener('click', toggleWatched);
 
@@ -201,7 +209,7 @@ els.delete.addEventListener('click', async () => {
     location.href = './';
     return;
   }
-  history.replaceState(null, '', watchUrl(following));
+  replaceVideo(watchUrl(following));
   renderList();
   load(following, wasPlaying); // also highlights it in the rebuilt list
 });
@@ -231,6 +239,7 @@ setupShortcuts(player, {
   p: () => go(neighbor(-1)),
   '/': () => els.search.focus(),
   w: toggleWatched,
+  ...backShortcuts(() => './', (ref) => !ref.has('v') && !ref.has('page')), // the home page
 });
 
 // ---------- Init ----------

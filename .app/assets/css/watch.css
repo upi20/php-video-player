@@ -177,6 +177,8 @@
 
 .cbtn svg { width: 22px; height: 22px; }
 .cbtn:focus-visible { outline: 2px solid var(--accent); }
+.cbtn:disabled { opacity: .35; cursor: default; }
+.c-skip svg { width: 18px; height: 18px; }
 
 .c-speed {
   width: auto;

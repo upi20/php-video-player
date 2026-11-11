@@ -291,6 +291,42 @@ export function setupTheater(watchEl, onToggle = () => {}) {
   return toggle;
 }
 
+// ---------- Back to the list ----------
+// Switching videos on a watch page adds a history entry each time; history.state.depth counts
+// them, so going back to the list means stepping back depth + 1 entries.
+
+/** For switching videos: a new history entry, one deeper. */
+export function pushVideo(url) {
+  history.pushState({ depth: (history.state?.depth ?? 0) + 1 }, '', url);
+}
+
+/** For replacing the video (e.g. after deleting one) without changing the depth. */
+export function replaceVideo(url) {
+  history.replaceState(history.state, '', url);
+}
+
+/**
+ * Shortcuts (Esc, Q, Backspace) back to the list. When this tab came from the list
+ * (isList(referrer URL)), it steps back through history: the browser shows the list from its
+ * back/forward cache as it was left, scroll included, with no reload. Otherwise (a link, a new
+ * tab) it opens url(). In fullscreen, Esc is the browser's own (it leaves fullscreen first).
+ */
+export function backShortcuts(url, isList) {
+  let fromList = false;
+  try {
+    const ref = new URL(document.referrer);
+    fromList = ref.origin === location.origin && isList(ref.searchParams);
+  } catch {
+    // no referrer
+  }
+  const back = () => {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+    if (fromList) history.go(-((history.state?.depth ?? 0) + 1));
+    else location.assign(url());
+  };
+  return { Escape: back, q: back, Backspace: back };
+}
+
 // ---------- Keyboard shortcuts ----------
 /** Player shortcuts plus page-specific ones in `extra` (key → function). */
 export function setupShortcuts(player, extra = {}) {

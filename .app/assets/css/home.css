@@ -76,6 +76,9 @@
 
 /* Virtual grid (vgrid.js): every card has the same height, so rows can be computed instead of
    rendered. Titles always take two lines and the meta line one. */
+/* vgrid.js places the rows itself; the browser's scroll anchoring would shift the page again as
+   rows above the screen get their data (a remembered channel position landed two rows too low). */
+.vgrid { overflow-anchor: none; }
 .vgrid-spacer { grid-column: 1 / -1; }
 .vgrid-spacer[hidden] { display: none; }
 .vgrid .card-title { height: calc(2 * 1.35em); }

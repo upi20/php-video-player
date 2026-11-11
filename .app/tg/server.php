@@ -24,11 +24,16 @@ declare(strict_types=1);
 //                                       channel's videos: title, caption and file name, parts of words too
 //                                       Every video has "dupOf": the message id of the older video in the
 //                                       channel it duplicates (same size and duration), or null
+//                                       sort=new|old|long|short|big|small|popular|funny|unwatched|title|random
+//                                       (&seed=n for random). Once a channel has an index, every list is
+//                                       answered from it, in any order: Telegram is only asked for new videos.
 //   GET  /video?c=<id>&m=<msg>        → one video, with its channel
+//   GET  /position?c=<id>&m=<msg>     → {"index": n}: where that video is in the channel's list (0 = newest)
 //   GET  /thumb/<c>/<m>               → JPEG thumbnail
 //   GET  /stream/<c>/<m>              → the video itself, with HTTP Range (seekable). Served from the
 //                                       local copy when there is one; a small video is downloaded whole
-//                                       first (fast, parallel), so playing and analysing share one download
+//                                       first (fast, parallel), so playing and analysing share one download.
+//                                       ?whole=0: never download it whole (the viewer turned analysis off)
 //   GET  /saves                       → state of "Simpan ke vid" downloads
 //   POST /save  c=…&m=…               → download into the video folder (queued, one at a time)
 //   POST /save/cancel  c=…&m=…
@@ -41,6 +46,7 @@ declare(strict_types=1);
 
 use Amp\ByteStream\ReadableIterableStream;
 use Amp\DeferredCancellation;
+use Amp\DeferredFuture;
 use Amp\Http\HttpStatus;
 use Amp\Http\Server\DefaultErrorHandler;
 use Amp\Http\Server\Request;
@@ -53,6 +59,7 @@ use danog\MadelineProto\Logger;
 use danog\MadelineProto\RPCErrorException;
 use danog\MadelineProto\Settings;
 use Psr\Log\NullLogger;
+use Revolt\EventLoop;
 
 use function Amp\async;
 use function Amp\trapSignal;
@@ -79,9 +86,14 @@ const CACHE_TTL = 600;        // seconds a fetched message (with its file refere
 const CHANNELS_TTL = 30;      // seconds the channel list is reused (it comes from the session's own dialog list: cheap)
 // Search index: every video of a channel, fetched 100 at a time on the first search, then kept.
 const INDEX_DIR = '/cache/tg/index'; // <channel>.json, so a restart doesn't fetch it all again
-const INDEX_REFRESH = 300;    // seconds before newer videos are fetched on the next search
-const INDEX_REBUILD = 21600;  // seconds before it is fetched whole again (drops deleted videos)
+const INDEX_REFRESH = 900;    // seconds before newer videos are looked for again (one small request)
+const INDEX_REBUILD = 86400;  // seconds before it is fetched whole again (drops deleted videos, new view counts)
 const INDEX_MAX = 20000;      // videos kept per channel, the newest
+const INDEX_VERSION = 2;      // items gained fields (2: views, reactions): an older index is used while rebuilt
+// Orders of the list (?sort=), all made from the index; "new" is Telegram's own.
+const SORTS = ['new', 'old', 'long', 'short', 'big', 'small', 'popular', 'funny', 'unwatched', 'title', 'random'];
+const LAUGHS = ['😂', '🤣', '😆', '😹', '😁'];
+const MESSAGE_BATCH_DELAY = 0.03; // seconds message lookups wait to be asked from Telegram together
 const THUMB_TARGET_WIDTH = 480;
 
 // MadelineProto's IPC worker always logs to a file: MadelineProto.log next to this script by
@@ -123,6 +135,10 @@ final class Bridge
     private array $indexing = [];
     /** @var array<int, array<string, int>> channel => "size:duration" => oldest message with it */
     private array $dupes = [];
+    /** @var array<string, DeferredFuture> "c:m" => a message lookup waiting for its batch (message()) */
+    private array $lookups = [];
+    /** @var array<int, array<int, true>> channel => message ids in the next batch */
+    private array $lookupIds = [];
 
     public function __construct()
     {
@@ -166,6 +182,17 @@ final class Bridge
         if (!$this->api) {
             return ['state' => 'unconfigured'];
         }
+        try {
+            return $this->sessionStatus();
+        } catch (Throwable $e) {
+            // E.g. AUTH_KEY_DUPLICATED: the same session ran in two places and Telegram ended it.
+            // MadelineProto can't even start then; the page offers to reset it (logout()).
+            return ['state' => 'broken', 'error' => $e->getMessage()];
+        }
+    }
+
+    private function sessionStatus(): array
+    {
         $state = match ($this->api->getAuthorization()) {
             API::LOGGED_IN => 'ready',
             API::WAITING_CODE => 'code',
@@ -197,10 +224,36 @@ final class Bridge
 
     public function logout(): array
     {
-        $this->requireApi()->logout();
+        try {
+            $this->requireApi()->logout();
+        } catch (HttpError $e) {
+            throw $e;
+        } catch (Throwable) {
+            return $this->resetSession();
+        }
         $this->messages = [];
         $this->channels = null;
         return ['state' => 'login'];
+    }
+
+    /**
+     * Logging out failed because the session is broken (Telegram ended it): move it aside, kept
+     * for reference, and end this process. Docker starts the container again (restart policy)
+     * with no session, at the login step. A fresh process is more dependable than starting a new
+     * MadelineProto instance in this one, next to the broken one.
+     */
+    private function resetSession(): array
+    {
+        try {
+            if (is_dir(SESSION)) {
+                rename(SESSION, SESSION . '.mati-' . gmdate('Ymd-His'));
+            }
+        } catch (Throwable $e) {
+            throw new HttpError('Sesi tidak bisa direset: ' . $e->getMessage(), HttpStatus::INTERNAL_SERVER_ERROR);
+        }
+        fwrite(STDERR, "[" . gmdate('H:i:s') . "] Broken Telegram session moved aside; restarting for a fresh login\n");
+        EventLoop::delay(0.5, static fn () => exit(0)); // after this answer has been sent
+        return ['state' => 'restarting'];
     }
 
     // ---------- Browsing ----------
@@ -305,14 +358,21 @@ final class Bridge
      * One page of videos in channel $c, newest first. Continue from the last id with $offset, or
      * pass $index (≥ 0) to start at that position; then item k is video $index + k, null if unplayable.
      */
-    public function videos(int $c, int $offset, string $query, int $index = -1, int $limit = PAGE_SIZE, int $add = 0): array
-    {
+    public function videos(
+        int $c, int $offset, string $query, int $index = -1, int $limit = PAGE_SIZE, int $add = 0,
+        string $sort = 'new', int $seed = 0,
+    ): array {
         $api = $this->requireReady();
         $limit = max(1, min(MAX_PAGE_SIZE, $limit));
-        if (trim($query) !== '') {
-            return $this->search($c, $query, $offset, $index, $limit);
+        $sort = in_array($sort, SORTS, true) ? $sort : 'new';
+        // Videos in a channel hardly ever change: once it has an index, lists come from there.
+        if (trim($query) !== '' || $sort !== 'new' || $this->hasIndex($c)) {
+            $page = $this->fromIndex($c, $query, $sort, $seed, $offset, $index, $limit, $add);
+            if ($page !== null) {
+                return $page;
+            }
         }
-        $this->warmIndex($c); // duplicates are told from it
+        $this->warmIndex($c); // no index yet: Telegram's own pages meanwhile
         $res = $api->messages->search(
             peer: $c,
             q: $query,
@@ -349,71 +409,137 @@ final class Bridge
         ];
     }
 
-    // ---------- Search: in our own index of the channel, not Telegram's ----------
-    // Telegram only matches whole words of captions; this finds parts of words in the title,
-    // the caption and the file name, like the search of local videos.
+    // ---------- Lists from the index: search and every order ----------
+    // Telegram only matches whole words of captions and only lists newest first; the index finds
+    // parts of words in the title, the caption and the file name, and sorts any way.
 
-    /** Same answer as videos(), for the videos whose text contains every word of $query. */
-    private function search(int $c, string $query, int $offset, int $index, int $limit): array
-    {
-        $words = preg_split('/\s+/u', mb_strtolower(trim($query)), -1, PREG_SPLIT_NO_EMPTY);
-        $found = array_values(array_filter($this->index($c), function (array $item) use ($words): bool {
-            $text = mb_strtolower("{$item['title']}\n{$item['caption']}\n" . ($item['file'] ?? ''));
-            foreach ($words as $word) {
-                if (!str_contains($text, $word)) {
-                    return false;
-                }
-            }
-            return true;
-        }));
+    /**
+     * A page of channel $c's videos from its index, filtered by $query and in $sort order, at
+     * position $index, or after / around message $offset like Telegram does (add=-k: k-1 newer
+     * ones, then $offset itself). Null when $offset isn't listed (newer than the index) in the
+     * plain newest-first list: Telegram is asked then.
+     */
+    private function fromIndex(
+        int $c, string $query, string $sort, int $seed, int $offset, int $index, int $limit, int $add,
+    ): ?array {
+        $list = $this->listing($c, $query, $sort, $seed);
+        $count = count($list);
         $start = max(0, $index);
-        if ($index < 0 && $offset) { // continue after message $offset
-            $at = array_search($offset, array_column($found, 'm'), true);
-            $start = $at === false ? count($found) : $at + 1;
+        if ($index < 0 && $offset) {
+            $at = array_search($offset, array_column($list, 'm'), true);
+            if ($at === false) {
+                return trim($query) === '' && $sort === 'new' ? null : ['items' => [], 'total' => $count, 'next' => null];
+            }
+            $start = $add < 0 ? $at + $add + 1 : $at + 1;
         }
-        $page = array_slice($found, $start, $limit);
+        $end = $start + $limit;
+        $page = array_slice($list, max(0, $start), max(0, $end - max(0, $start)));
         return [
             'items' => array_map($this->withState(...), $page),
-            'total' => count($found),
-            'next' => $start + $limit < count($found) && $page ? end($page)['m'] : null,
+            'total' => $count,
+            'next' => $end < $count && $page ? end($page)['m'] : null,
         ];
     }
 
-    /** Every video of channel $c, newest first (without save/watched/liked). */
-    private function index(int $c): array
+    /** Channel $c's indexed videos whose text contains every word of $query, in $sort order. */
+    private function listing(int $c, string $query, string $sort, int $seed): array
     {
-        $index = $this->indexes[$c] ?? $this->loadIndex($c);
-        $age = $index === null ? PHP_INT_MAX : time() - $index['built'];
-        if ($age > INDEX_REBUILD || time() - $index['at'] > INDEX_REFRESH) {
-            $old = $age > INDEX_REBUILD ? null : $index;
-            $this->indexing[$c] ??= async(function () use ($c, $old): array {
-                try {
-                    return $this->fetchIndex($c, $old);
-                } finally {
-                    unset($this->indexing[$c]);
+        $items = $this->index($c);
+        $words = preg_split('/\s+/u', mb_strtolower(trim($query)), -1, PREG_SPLIT_NO_EMPTY);
+        if ($words) {
+            $items = array_values(array_filter($items, function (array $item) use ($words): bool {
+                $text = mb_strtolower("{$item['title']}\n{$item['caption']}\n" . ($item['file'] ?? ''));
+                foreach ($words as $word) {
+                    if (!str_contains($text, $word)) {
+                        return false;
+                    }
                 }
-            });
-            $index = $this->indexing[$c]->await();
+                return true;
+            }));
         }
-        return $index['items'];
+        return $this->sorted($c, $items, $sort, $seed);
+    }
+
+    /** $items (newest first) in $sort order; ties stay newest first (usort is stable). */
+    private function sorted(int $c, array $items, string $sort, int $seed): array
+    {
+        if ($sort === 'random') { // the same $seed gives the same order, so pages stay consistent
+            return (new Random\Randomizer(new Random\Engine\Mt19937($seed)))->shuffleArray($items);
+        }
+        $by = fn (string $key): Closure => fn (array $a, array $b): int => ($b[$key] ?? 0) <=> ($a[$key] ?? 0);
+        $compare = match ($sort) {
+            'old' => fn ($a, $b) => $a['m'] <=> $b['m'],
+            // By duration in whole seconds (as the cards show it), then title, then size: copies of a
+            // video, which share all three, end up next to each other.
+            'long' => fn ($a, $b) => (round($b['duration']) <=> round($a['duration'])) ?: self::byTitleSize($a, $b),
+            'short' => fn ($a, $b) => (round($a['duration']) <=> round($b['duration'])) ?: self::byTitleSize($a, $b),
+            'big' => $by('size'),
+            'small' => fn ($a, $b) => $a['size'] <=> $b['size'],
+            'popular' => $by('views'),
+            'funny' => fn ($a, $b) => (($b['laughs'] ?? 0) <=> ($a['laughs'] ?? 0)) ?: (($b['reacts'] ?? 0) <=> ($a['reacts'] ?? 0)),
+            'unwatched' => fn ($a, $b) => isset($this->watched["$c:{$a['m']}"]) <=> isset($this->watched["$c:{$b['m']}"]),
+            'title' => fn ($a, $b) => strnatcasecmp($a['title'], $b['title']),
+            default => null,
+        };
+        if ($compare) {
+            usort($items, $compare);
+        }
+        return $items;
+    }
+
+    private static function byTitleSize(array $a, array $b): int
+    {
+        return strnatcasecmp($a['title'], $b['title']) ?: ($a['size'] <=> $b['size']);
+    }
+
+    private function hasIndex(int $c): bool
+    {
+        return ($this->indexes[$c] ?? $this->loadIndex($c)) !== null;
     }
 
     /**
-     * Starts fetching channel $c's index in the background when there is none or it is old, without
-     * waiting: the page is answered at once, and its duplicates are marked once the index is in.
+     * Every video of channel $c, newest first (without save/watched/liked). An old index is used as
+     * it is while a fresh one is fetched in the background; only a channel without one waits.
      */
+    private function index(int $c): array
+    {
+        $index = $this->indexes[$c] ?? $this->loadIndex($c);
+        if ($index !== null) {
+            $this->warmIndex($c);
+            return $index['items'];
+        }
+        return $this->refreshIndex($c)->await()['items'];
+    }
+
+    /** The fetch of channel $c's index: newer videos only, or all of them when due a rebuild. */
+    private function refreshIndex(int $c): Amp\Future
+    {
+        return $this->indexing[$c] ??= async(function () use ($c): array {
+            try {
+                $index = $this->indexes[$c] ?? null;
+                $rebuild = $index === null || time() - $index['built'] > INDEX_REBUILD
+                    || ($index['v'] ?? 1) !== INDEX_VERSION;
+                return $this->fetchIndex($c, $rebuild ? null : $index);
+            } finally {
+                unset($this->indexing[$c]);
+            }
+        });
+    }
+
+    /** Starts refreshing channel $c's index in the background when it is old (or missing), without waiting. */
     private function warmIndex(int $c): void
     {
         $index = $this->indexes[$c] ?? $this->loadIndex($c);
-        $fresh = $index !== null && time() - $index['at'] <= INDEX_REFRESH && time() - $index['built'] <= INDEX_REBUILD;
+        $fresh = $index !== null && time() - $index['at'] <= INDEX_REFRESH
+            && time() - $index['built'] <= INDEX_REBUILD && ($index['v'] ?? 1) === INDEX_VERSION;
         if ($fresh || isset($this->indexing[$c])) {
             return;
         }
         async(function () use ($c): void {
             try {
-                $this->index($c);
+                $this->refreshIndex($c)->await();
             } catch (Throwable) {
-                // tried again on the next page
+                // tried again on the next list
             }
         });
     }
@@ -480,6 +606,7 @@ final class Bridge
         } while (count($messages) >= MAX_PAGE_SIZE && $offsetId && count($new) < INDEX_MAX);
 
         $index = [
+            'v' => INDEX_VERSION,
             'at' => time(),
             'built' => $old['built'] ?? time(),
             'items' => array_slice([...$new, ...($old['items'] ?? [])], 0, INDEX_MAX),
@@ -522,10 +649,46 @@ final class Bridge
         ] + $item;
     }
 
+    /** The position of video $m in channel $c's list in $sort order, as the grid counts (0 = first), or null. */
+    public function position(int $c, int $m, string $sort = 'new', int $seed = 0): array
+    {
+        $sort = in_array($sort, SORTS, true) ? $sort : 'new';
+        if ($sort !== 'new' || $this->hasIndex($c)) {
+            $at = array_search($m, array_column($this->listing($c, '', $sort, $seed), 'm'), true);
+            if ($at !== false || $sort !== 'new') {
+                return ['index' => $at === false ? null : $at];
+            }
+        }
+        $res = $this->requireReady()->messages->search(
+            peer: $c,
+            q: '',
+            filter: ['_' => 'inputMessagesFilterVideo'],
+            min_date: 0,
+            max_date: 0,
+            offset_id: $m,
+            add_offset: -1, // answers with $m itself; offset_id_offset is then its position + 1
+            limit: 1,
+            max_id: 0,
+            min_id: 0,
+            hash: 0,
+        );
+        $at = $res['offset_id_offset'] ?? null;
+        $found = ($res['messages'][0]['id'] ?? null) === $m;
+        return ['index' => $at !== null && $found ? max(0, $at - 1) : null];
+    }
+
     /** One video's details and its channel, for the watch page. */
     public function video(int $c, int $m): array
     {
         $api = $this->requireReady();
+        if ($this->hasIndex($c)) { // from the index: no request to Telegram
+            foreach ($this->index($c) as $item) {
+                if ($item['m'] === $m) {
+                    $chat = $api->getInfo($c)['Chat'] ?? []; // the session's own peer cache
+                    return $this->withState($item) + ['channel' => ['title' => (string) ($chat['title'] ?? ''), 'username' => $chat['username'] ?? null]];
+                }
+            }
+        }
         $item = $this->videoItem($c, $this->message($c, $m))
             ?? throw new HttpError('Pesan ini bukan video', HttpStatus::NOT_FOUND);
         $chat = $api->getInfo($c)['Chat'] ?? [];
@@ -549,6 +712,14 @@ final class Bridge
         }
         $caption = trim((string) ($message['message'] ?? ''));
         $key = "$c:{$message['id']}";
+        $reacts = 0;
+        $laughs = 0;
+        foreach ($message['reactions']['results'] ?? [] as $reaction) {
+            $reacts += (int) ($reaction['count'] ?? 0);
+            if (in_array($reaction['reaction']['emoticon'] ?? '', LAUGHS, true)) {
+                $laughs += (int) ($reaction['count'] ?? 0);
+            }
+        }
         return [
             'c' => $c,
             'm' => $message['id'],
@@ -562,6 +733,9 @@ final class Bridge
             'size' => (int) ($doc['size'] ?? 0),
             'mime' => (string) ($doc['mime_type'] ?? ''),
             'thumb' => !empty($doc['thumbs']),
+            'views' => (int) ($message['views'] ?? 0),
+            'reacts' => $reacts,
+            'laughs' => $laughs,
             'save' => $this->saveStatus($key),
             'watched' => $this->watched[$key] ?? null,
             'liked' => $this->likes[$key]['liked'] ?? null,
@@ -581,7 +755,11 @@ final class Bridge
         return "Video #$id";
     }
 
-    /** The raw message (cached for a while; MadelineProto refreshes expired file references itself). */
+    /**
+     * The raw message (cached for a while; MadelineProto refreshes expired file references itself).
+     * Lookups are gathered for MESSAGE_BATCH_DELAY and asked together, up to 100 per request: a grid
+     * page of new thumbnails is one request to Telegram, not one per video.
+     */
     private function message(int $c, int $m): array
     {
         $key = "$c:$m";
@@ -589,13 +767,50 @@ final class Bridge
         if ($hit && time() - $hit['at'] < CACHE_TTL) {
             return $hit['message'];
         }
-        $res = $this->requireReady()->channels->getMessages(channel: $c, id: [['_' => 'inputMessageID', 'id' => $m]]);
-        $message = $res['messages'][0] ?? null;
-        if (!is_array($message) || empty($message['media']['document'])) {
-            throw new HttpError('Video tidak ditemukan di channel', HttpStatus::NOT_FOUND);
+        if (!isset($this->lookups[$key])) {
+            $this->lookups[$key] = new DeferredFuture();
+            if (empty($this->lookupIds[$c])) {
+                EventLoop::delay(MESSAGE_BATCH_DELAY, fn () => $this->lookUp($c));
+            }
+            $this->lookupIds[$c][$m] = true;
         }
-        $this->messages[$key] = ['at' => time(), 'message' => $message];
-        return $message;
+        return $this->lookups[$key]->getFuture()->await();
+    }
+
+    /** Asks Telegram for the messages waiting in channel $c's batch, and answers each waiter. */
+    private function lookUp(int $c): void
+    {
+        $ids = array_keys($this->lookupIds[$c] ?? []);
+        unset($this->lookupIds[$c]);
+        foreach (array_chunk($ids, 100) as $chunk) {
+            async(function () use ($c, $chunk): void {
+                $found = [];
+                $error = null;
+                try {
+                    $res = $this->requireReady()->channels->getMessages(
+                        channel: $c,
+                        id: array_map(fn (int $m): array => ['_' => 'inputMessageID', 'id' => $m], $chunk),
+                    );
+                    foreach ($res['messages'] ?? [] as $message) {
+                        if (!empty($message['media']['document'])) {
+                            $found[$message['id']] = $message;
+                        }
+                    }
+                } catch (Throwable $e) {
+                    $error = $e;
+                }
+                foreach ($chunk as $m) {
+                    $waiter = $this->lookups["$c:$m"] ?? null;
+                    unset($this->lookups["$c:$m"]);
+                    if (isset($found[$m])) {
+                        $this->messages["$c:$m"] = ['at' => time(), 'message' => $found[$m]];
+                        $waiter?->complete($found[$m]);
+                    } else {
+                        $waiter?->error($error ?? new HttpError('Video tidak ditemukan di channel', HttpStatus::NOT_FOUND));
+                    }
+                }
+            });
+        }
     }
 
     // ---------- Files ----------
@@ -605,7 +820,9 @@ final class Bridge
         $message = $this->message($c, $m);
         $doc = $message['media']['document'] ?? [];
         $file = $this->copyPath($c, $m);
-        if (!is_file($file) && ($doc['size'] ?? PHP_INT_MAX) <= STREAM_WHOLE_MAX) {
+        parse_str($request->getUri()->getQuery(), $query);
+        $whole = ($query['whole'] ?? '1') !== '0';
+        if ($whole && !is_file($file) && ($doc['size'] ?? PHP_INT_MAX) <= STREAM_WHOLE_MAX) {
             try {
                 $this->localCopy($c, $m);
             } catch (Throwable) {
@@ -996,8 +1213,11 @@ function route(Bridge $bridge, Request $request): Response
             isset($query['index']) ? $int($query, 'index') : -1,
             isset($query['limit']) ? $int($query, 'limit') : PAGE_SIZE,
             $int($query, 'add'),
+            (string) ($query['sort'] ?? 'new'),
+            $int($query, 'seed'),
         )),
         'GET /video' => json($bridge->video($int($query, 'c'), $int($query, 'm'))),
+        'GET /position' => json($bridge->position($int($query, 'c'), $int($query, 'm'), (string) ($query['sort'] ?? 'new'), $int($query, 'seed'))),
         'GET /saves' => json($bridge->saves()),
         'POST /save' => json($bridge->save($int($post, 'c'), $int($post, 'm'))),
         'POST /download' => json($bridge->fetchForAnalysis($int($post, 'c'), $int($post, 'm'))),
@@ -1023,7 +1243,9 @@ Revolt\EventLoop::setErrorHandler(static function (Throwable $e): void {
     fwrite(STDERR, sprintf("[%s] Unhandled %s: %s\n", gmdate('H:i:s'), $e::class, $e->getMessage()));
 });
 
-$server = SocketHttpServer::createForDirectAccess(new NullLogger());
+// Every request comes from one address, the player's Apache: amphp's default of 10 connections
+// per address made the 11th request at a time (thumbnails, streams, several tabs) fail with a 502.
+$server = SocketHttpServer::createForDirectAccess(new NullLogger(), connectionLimitPerIp: 1000);
 $server->expose(LISTEN);
 $server->start(new ClosureRequestHandler(static function (Request $request) use ($bridge): Response {
     try {
